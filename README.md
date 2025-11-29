@@ -1,6 +1,6 @@
 # kidsview-cli
 
-CLI do platformy Kidsview (obecności, oceny, posiłki, czesne, kalendarz, wiadomości) przeznaczony dla ludzi i automatyzacji (np. Home Assistant, MQTT).
+Klient CLI platformy Kidsview (app.kidsview.pl). Stworzony z myślą o wygodnej obsłudzę z poziomu konsoli oraz skryptowaniu (mqtt).
 
 ## Szybki start
 1. Wymagania: Python 3.11+, `uv` zainstalowany globalnie.
@@ -20,35 +20,24 @@ CLI do platformy Kidsview (obecności, oceny, posiłki, czesne, kalendarz, wiado
 Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi środowiskowymi, np. `KIDSVIEW_USER_POOL_ID`.
 
 ## Użycie CLI (wybrane komendy)
-- Ogólne zapytanie GraphQL:
-  `uv run kidsview-cli graphql --query 'query { __typename }'`
-  lub z własnego pliku: `uv run kidsview-cli graphql --query @sciezka/do/pliku.graphql --vars '{"first":5}'`
-- Ogłoszenia: `uv run kidsview-cli announcements --first 10`
-- Rachunki miesięczne: `uv run kidsview-cli monthly-bills --year WWVhck5vZGU6MjM4OA== --is-paid true`
-- Galerie: `uv run kidsview-cli galleries --first 3`
-- Pobierz galerie: `uv run kidsview-cli gallery-download --all --output-dir galleries` lub `--id g1,g2`; bez parametrów wybierzesz interaktywnie.
-- Dziecko (skrót): `uv run kidsview-cli active-child` (id, grupa, saldo)
-- Dziecko (szczegóły + aktywności): `uv run kidsview-cli active-child --detailed --date-from 2025-11-23 --date-to 2025-11-28`
-- Użytkownicy czatu: `uv run kidsview-cli chat-users`
-- Szukaj w czacie: `uv run kidsview-cli chat-search --search olga`
-- Wyślij wiadomość: `uv run kidsview-cli chat-send --recipients S2lkc1ZpZXdCYXNlVXNlck5vZGU6Nzc5MzI= --text "🦄"`
-- Profil (me): `uv run kidsview-cli me`
-- Kolory placówek: `uv run kidsview-cli colors`
-- Liczniki nieprzeczytanych: `uv run kidsview-cli unread`
-- Dieta dziecka: `uv run kidsview-cli meals`
-- Wnioski (applications): `uv run kidsview-cli applications --phrase "" --status ""`
-- Powiadomienia (notifications): `uv run kidsview-cli notifications --first 20 --pending true`
-- Płatności: `uv run kidsview-cli payments --date-from 2025-12-01 --date-to 2025-12-31`
-- Zgłoszenie nieobecności: `uv run kidsview-cli absence --date today` (domyślnie użyje dziecka z kontekstu)
-- Polubienie galerii: `uv run kidsview-cli gallery-like --id <GALLERY_ID>`
-- Komentarz do galerii: `uv run kidsview-cli gallery-comment --id <GALLERY_ID> --content "Super"`
-- Złożenie wniosku: `uv run kidsview-cli application-submit --form-id <FORM_ID> --comment "..." --months 3`
-- Podsumowanie płatności: `uv run kidsview-cli payments-summary --search ""`
-- Zlecenia płatności: `uv run kidsview-cli payment-orders --first 20`
-- Szybki kalendarz: `uv run kidsview-cli quick-calendar --today --tomorrow`
-- Plan grupy: `uv run kidsview-cli schedule --group-id <ID>`
-- Kalendarz: `uv run kidsview-cli calendar --date-from 2025-11-01 --date-to 2025-11-30 --activity-types 0,1,5,9`
-- Obserwacje zajęć dodatkowych: `uv run kidsview-cli observations --child-id <id_dziecka>`
+| Komenda | Opis |
+| --- | --- |
+| `graphql --query ...` | Dowolne zapytanie GraphQL (inline lub `@plik.graphql`). |
+| `announcements --first 10` | Ogłoszenia. |
+| `monthly-bills --year ... --is-paid true` | Rachunki miesięczne. |
+| `payments` / `payments-summary` / `payment-orders` | Historia płatności, podsumowanie, zlecenia płatności. |
+| `galleries --first 3` | Lista galerii. |
+| `gallery-download --all` / `--id g1,g2` | Pobieranie galerii (bez parametrów wybierzesz interaktywnie). |
+| `gallery-like` / `gallery-comment` | Polubienie/komentarz galerii. |
+| `active-child` / `active-child --detailed ...` | Skrót lub szczegóły dziecka. |
+| `me` | Profil użytkownika, dzieci, placówki, lata. |
+| `chat-users` / `chat-search` / `chat-send` | Użytkownicy czatu, wyszukiwanie, wysyłanie wiadomości. |
+| `notifications` | Powiadomienia (filtry, mark-read, only-unread). |
+| `applications` / `application-submit` | Lista wniosków, składanie wniosku. |
+| `absence --date today` | Zgłoszenie nieobecności (domyślnie dziecko z kontekstu). |
+| `meals` / `colors` / `unread` | Dieta, kolory placówek, liczniki nieprzeczytanych. |
+| `quick-calendar` / `schedule` / `calendar` | Szybki kalendarz, plan grupy, kalendarz. |
+| `observations` | Obserwacje zajęć dodatkowych. |
 
 ## Kontekst cookies i tokeny
 - CLI automatycznie buduje ciasteczka z kontekstu zapisanego w `~/.config/kidsview-cli/context.json` (ustaw `kidsview-cli context --auto` lub ręcznie podaj `--child-id/--preschool-id/--year-id`). Nie musisz ręcznie wklejać ciasteczek.
