@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import httpx
+from rich.progress import (
+    BarColumn,
+    Progress,
+    TaskID,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 from .client import GraphQLClient
 from .config import Settings
@@ -38,6 +47,9 @@ async def fetch_galleries(
 async def download_gallery(
     gallery: dict[str, Any],
     output_dir: Path,
+    *,
+    progress: Progress | None = None,
+    concurrency: int = 4,
 ) -> Path:
     gid = str(gallery.get("id"))
     name = str(gallery.get("name", gid))
@@ -52,14 +64,32 @@ async def download_gallery(
     target = target_dir(output_dir, name, gid)
     target.mkdir(parents=True, exist_ok=True)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for idx, url in enumerate(image_urls, start=1):
-            filename = target / f"{idx:03d}{Path(url).suffix or '.jpg'}"
-            if filename.exists():
-                continue
+    task_id: TaskID | None = None
+    if progress:
+        task_id = progress.add_task(f"[cyan]{sanitize_name(name)}[/cyan]", total=len(image_urls))
+
+    async def fetch_one(
+        idx: int, url: str, client: httpx.AsyncClient, sem: asyncio.Semaphore
+    ) -> None:
+        filename = target / f"{idx:03d}{Path(url).suffix or '.jpg'}"
+        if filename.exists():
+            if progress and task_id is not None:
+                progress.advance(task_id)
+            return
+        async with sem:
             resp = await client.get(url)
             resp.raise_for_status()
             filename.write_bytes(resp.content)
+        if progress and task_id is not None:
+            progress.advance(task_id)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        sem = asyncio.Semaphore(concurrency)
+        await asyncio.gather(
+            *(fetch_one(idx, url, client, sem) for idx, url in enumerate(image_urls, start=1))
+        )
+    if progress and task_id is not None:
+        progress.update(task_id, completed=len(image_urls))
     return target
 
 
@@ -71,6 +101,8 @@ async def download_all(  # noqa: PLR0913
     output_dir: Path,
     skip_downloaded: bool = False,
     galleries: list[dict[str, Any]] | None = None,
+    progress: Progress | None = None,
+    concurrency: int = 4,
 ) -> list[Path]:
     all_galleries = galleries or await fetch_galleries(settings, tokens, context)
     if gallery_ids:
@@ -84,6 +116,16 @@ async def download_all(  # noqa: PLR0913
         dest_dir = target_dir(output_dir, name, gid)
         if skip_downloaded and dest_dir.exists():
             continue
-        dest = await download_gallery(gal, output_dir)
+        dest = await download_gallery(gal, output_dir, progress=progress, concurrency=concurrency)
         downloaded.append(dest)
     return downloaded
+
+
+def make_progress() -> Progress:
+    return Progress(
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        transient=True,
+    )

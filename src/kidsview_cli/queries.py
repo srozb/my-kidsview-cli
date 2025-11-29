@@ -1,5 +1,215 @@
 """Static GraphQL queries used by the CLI."""
 
+USER_NOTIFICATION_PREFERENCES = """
+query userNotificationPreferences {
+  userNotificationPreferences {
+    type
+    name
+    enabled
+  }
+}
+"""
+
+SET_USER_NOTIFICATION_PREFERENCES = """
+mutation setUserNotificationPreferences($preferences: [NotificationPreferenceInput!]!) {
+  setUserNotificationPreferences(preferences: $preferences) {
+    success
+  }
+}
+"""
+
+SET_NOTIFICATION_READ = """
+mutation setNotificationRead($notificationId: ID!) {
+  setNotificationRead(notificationId: $notificationId) {
+    success
+  }
+}
+"""
+
+QUICK_CALENDAR = """
+query quickCalendar($groupsIds: [ID], $dateFrom: Date!, $dateTo: Date!) {
+  quickCalendar(groupsIds: $groupsIds, dateFrom: $dateFrom, dateTo: $dateTo) {
+    date
+    hasEvents
+    hasNewEvents
+    holiday
+    absent
+    mealsModified
+  }
+}
+"""
+
+SCHEDULE = """
+query schedule($group: ID!) {
+  schedule(group: $group) {
+    title
+    groupsNames
+    startDate
+    endDate
+    allDay
+    id
+    type
+    color
+    basicActivitySchedule
+  }
+}
+"""
+
+SET_CHILD_ABSENCE = """
+mutation setChildAbsence(
+  $childId: ID!
+  $date: Date!
+  $dateTo: Date
+  $forcePartialMealRefund: Boolean
+  $onTime: Boolean
+  $partialMealRefund: Boolean
+) {
+  setChildAbsence(
+    childId: $childId
+    date: $date
+    dateTo: $dateTo
+    forcePartialMealRefund: $forcePartialMealRefund
+    onTime: $onTime
+    partialMealRefund: $partialMealRefund
+  ) {
+    success
+  }
+}
+"""
+
+PAYMENTS = """
+query payments(
+  $first: Int
+  $after: String
+  $dateFrom: Date
+  $dateTo: Date
+  $child: ID
+  $type: String
+  $isBooked: Boolean
+) {
+  payments(
+    first: $first
+    after: $after
+    dateFrom: $dateFrom
+    dateTo: $dateTo
+    child: $child
+    type: $type
+    isBooked: $isBooked
+  ) {
+    edges {
+      node {
+        id
+        title
+        amount
+        paymentDate
+        type
+        isBooked
+        child { id name surname }
+      }
+    }
+    pageInfo { endCursor hasNextPage }
+  }
+}
+"""
+
+SET_GALLERY_LIKE = """
+mutation setGalleryLike($galleryId: ID!) {
+  setGalleryLike(galleryId: $galleryId) {
+    success
+    isLiked
+  }
+}
+"""
+
+CREATE_GALLERY_COMMENT = """
+mutation createGalleryComment($galleryId: ID!, $content: String!) {
+  createGalleryComment(
+    input: { gallery: $galleryId, content: $content }
+  ) {
+    errors
+    galleryComment { id content }
+  }
+}
+"""
+
+CREATE_APPLICATION = """
+mutation createApplication(
+  $applicationFormId: ID!
+  $commentParent: String
+  $acceptContract: Boolean
+  $months: Int
+) {
+  createApplication(
+    input: {
+      applicationFormId: $applicationFormId
+      form: { commentParent: $commentParent, acceptContract: $acceptContract, months: $months }
+    }
+  ) {
+    success
+    error
+    id
+  }
+}
+"""
+
+PAYMENT_ORDERS = """
+query paymentOrders($first: Int, $after: String, $before: String, $offset: Int) {
+  paymentOrders(first: $first, after: $after, before: $before, offset: $offset) {
+    pageInfo { endCursor hasNextPage }
+    edges {
+      node {
+        id
+        created
+        amount
+        bluemediaOrderId
+        bluemediaPaymentStatus
+        bookingDate
+      }
+    }
+  }
+}
+"""
+
+PAYMENTS_SUMMARY = """
+query paymentsSummary(
+  $search: String
+  $groupsIds: [ID]
+  $interestAmountGte: Decimal
+  $interestAmountLte: Decimal
+  $balanceGte: Decimal
+  $balanceLte: Decimal
+  $paidMonthlyBillsCountGte: Int
+  $paidMonthlyBillsCountLte: Int
+) {
+  paymentsSummary(
+    search: $search
+    groupsIds: $groupsIds
+    interestAmountGte: $interestAmountGte
+    interestAmountLte: $interestAmountLte
+    balanceGte: $balanceGte
+    balanceLte: $balanceLte
+    paidMonthlyBillsCountGte: $paidMonthlyBillsCountGte
+    paidMonthlyBillsCountLte: $paidMonthlyBillsCountLte
+  ) {
+    fullBalance
+    children(first: 50) {
+      edges {
+        node {
+          id
+          name
+          surname
+          balance
+          paidAmount
+          amount
+          paidMonthlyBillsCount
+        }
+      }
+      pageInfo { endCursor hasNextPage }
+    }
+  }
+}
+"""
+
 ANNOUNCEMENTS = """
 query announcements($first: Int, $after: String, $status: AnnouncementStatus, $phrase: String) {
   announcements(first: $first, after: $after, status: $status, phrase: $phrase) {

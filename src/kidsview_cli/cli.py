@@ -19,7 +19,7 @@ from .auth import AuthClient, AuthError
 from .client import ApiError, GraphQLClient
 from .config import Settings
 from .context import Context, ContextStore
-from .download import download_all
+from .download import download_all, make_progress
 from .session import AuthTokens, SessionStore
 
 app = typer.Typer(help="Kidsview CLI for humans and automation.")
@@ -102,13 +102,24 @@ def _execute_graphql(  # noqa: PLR0913
                     raise typer.Exit(code=1) from auth_exc
             break
 
-    if settings.debug and last_error:
-        console.print(f"[red]{label} error (debug):[/red] {last_error}")
-    else:
-        console.print(
-            f"[red]{label} failed.[/red] "
-            f"Try `kidsview-cli refresh` or re-login. Set KIDSVIEW_DEBUG=1 for raw error."
+    if last_error:
+        msg = str(last_error)
+        lower_msg = msg.lower()
+        permission_hint = (
+            "permission" in lower_msg or "odmowa dost" in lower_msg or "brak uprawnie" in lower_msg
         )
+        if settings.debug:
+            console.print(f"[red]{label} error (debug):[/red] {msg}")
+        elif permission_hint:
+            console.print(
+                f"[red]{label} failed: access denied or insufficient permissions.[/red] "
+                f"Server message: {msg}"
+            )
+        else:
+            console.print(
+                f"[red]{label} failed.[/red] "
+                f"Try `kidsview-cli refresh` or re-login. Set KIDSVIEW_DEBUG=1 for raw error."
+            )
     raise typer.Exit(code=1) from last_error
 
 
@@ -250,7 +261,7 @@ def announcements(
         if not edges:
             console.print("No announcements.")
             return
-        table = Table(title="Announcements", show_lines=True)
+        table = Table(title="📢 Announcements", show_lines=True)
         table.add_column("Title")
         table.add_column("Text")
         table.add_column("Created")
@@ -303,7 +314,7 @@ def monthly_bills(  # noqa: PLR0913
         edges = bills.get("edges") or []
         total_balance = bills.get("totalBalance", "")
         total = str(total_balance)
-        table = Table(title=f"Monthly bills (total balance: {total})")
+        table = Table(title=f"💰 Monthly bills (total balance: {total})")
         table.add_column("Payment due")
         table.add_column("Child")
         table.add_column("Full amount")
@@ -322,6 +333,63 @@ def monthly_bills(  # noqa: PLR0913
                 str(node.get("balance", "")),
             )
         console.print(table)
+
+
+@app.command()
+def payments(  # noqa: PLR0913
+    date_from: str | None = typer.Option(None, help="Start date (YYYY-MM-DD)."),
+    date_to: str | None = typer.Option(None, help="End date (YYYY-MM-DD)."),
+    child_id: str | None = typer.Option(None, help="Child ID filter."),
+    type_filter: str | None = typer.Option(None, "--type", help="Payment type filter."),
+    is_booked: bool | None = typer.Option(None, "--booked/--not-booked", help="Booked flag."),
+    first: int = typer.Option(20, help="Number of records."),
+    after: str | None = typer.Option(None, help="Cursor for pagination."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Fetch payments history."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    variables: dict[str, object] = {
+        "dateFrom": date_from,
+        "dateTo": date_to,
+        "child": child_id,
+        "type": type_filter,
+        "isBooked": is_booked,
+        "first": first,
+        "after": after,
+    }
+    data = _execute_graphql(
+        settings, tokens, queries.PAYMENTS, variables, context, label="payments"
+    )
+    payload = {"payments": data.get("payments")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    edges = (payload.get("payments") or {}).get("edges") or []
+    if not edges:
+        console.print("No payments.")
+        return
+    table = Table(title="💳 Payments")
+    table.add_column("Title")
+    table.add_column("Amount")
+    table.add_column("Date")
+    table.add_column("Type")
+    table.add_column("Booked")
+    table.add_column("Child")
+    for item in edges:
+        node = item.get("node", {})
+        child = node.get("child") or {}
+        child_name = f"{child.get('name','')} {child.get('surname','')}".strip()
+        table.add_row(
+            str(node.get("title", "")),
+            str(node.get("amount", "")),
+            str(node.get("paymentDate", "")),
+            str(node.get("type", "")),
+            "yes" if node.get("isBooked") else "no",
+            child_name or "-",
+        )
+    console.print(table)
 
 
 @app.command()
@@ -356,7 +424,7 @@ def galleries(  # noqa: PLR0913
         if not edges:
             console.print("No galleries.")
             return
-        table = Table(title="Galleries", show_lines=True)
+        table = Table(title="🖼️ Galleries", show_lines=True)
         table.add_column("ID")
         table.add_column("Name")
         table.add_column("Created")
@@ -370,6 +438,196 @@ def galleries(  # noqa: PLR0913
                 str(node.get("imagesCount", "")),
             )
         console.print(table)
+
+
+@app.command("gallery-like")
+def gallery_like(
+    gallery_id: str = typer.Option(..., "--id", help="Gallery ID to like/unlike."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Toggle like for a gallery."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    data = _execute_graphql(
+        settings,
+        tokens,
+        queries.SET_GALLERY_LIKE,
+        {"galleryId": gallery_id},
+        context,
+        label="setGalleryLike",
+    )
+    if json_output:
+        console.print_json(data=data)
+    else:
+        result = (data.get("setGalleryLike") or {}).get("isLiked")
+        console.print(f"[green]Gallery like toggled. isLiked={result}[/green]")
+
+
+@app.command("gallery-comment")
+def gallery_comment(
+    gallery_id: str = typer.Option(..., "--id", help="Gallery ID."),
+    content: str = typer.Option(..., "--content", prompt=True, help="Comment text."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Add comment to a gallery."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    data = _execute_graphql(
+        settings,
+        tokens,
+        queries.CREATE_GALLERY_COMMENT,
+        {"galleryId": gallery_id, "content": content},
+        context,
+        label="createGalleryComment",
+    )
+    if json_output:
+        console.print_json(data=data)
+    else:
+        errors = (data.get("createGalleryComment") or {}).get("errors")
+        if errors:
+            console.print(f"[red]Error:[/red] {errors}")
+        else:
+            console.print("[green]Comment added.[/green]")
+
+
+@app.command("application-submit")
+def application_submit(
+    form_id: str = typer.Option(..., "--form-id", help="Application form ID."),
+    comment: str = typer.Option("", "--comment", help="Parent comment."),
+    accept_contract: bool = typer.Option(True, "--accept-contract/--no-accept-contract"),
+    months: int | None = typer.Option(None, "--months", help="Number of months (if required)."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Submit an application (createApplication)."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    variables: dict[str, object] = {
+        "applicationFormId": form_id,
+        "commentParent": comment or None,
+        "acceptContract": accept_contract,
+        "months": months,
+    }
+    data = _execute_graphql(
+        settings,
+        tokens,
+        queries.CREATE_APPLICATION,
+        variables,
+        context,
+        label="createApplication",
+    )
+    if json_output:
+        console.print_json(data=data)
+    else:
+        result = data.get("createApplication") or {}
+        if result.get("success"):
+            console.print(f"[green]Application submitted (id={result.get('id')}).[/green]")
+        else:
+            console.print(f"[red]Submit failed:[/red] {result.get('error')}")
+
+
+@app.command("payments-summary")
+def payments_summary(  # noqa: PLR0913
+    search: str = typer.Option("", help="Search phrase."),
+    groups_ids: str = typer.Option("", help="Comma-separated group IDs."),
+    balance_gte: str | None = typer.Option(None, help="Min balance (Decimal)."),
+    balance_lte: str | None = typer.Option(None, help="Max balance (Decimal)."),
+    paid_count_gte: int | None = typer.Option(None, help="Min paid monthly bills count."),
+    paid_count_lte: int | None = typer.Option(None, help="Max paid monthly bills count."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Fetch payments summary (balances per child)."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    variables: dict[str, object] = {
+        "search": search or None,
+        "groupsIds": [g for g in groups_ids.split(",") if g] or None,
+        "balanceGte": balance_gte,
+        "balanceLte": balance_lte,
+        "paidMonthlyBillsCountGte": paid_count_gte,
+        "paidMonthlyBillsCountLte": paid_count_lte,
+    }
+    data = _execute_graphql(
+        settings, tokens, queries.PAYMENTS_SUMMARY, variables, context, label="paymentsSummary"
+    )
+    payload = {"paymentsSummary": data.get("paymentsSummary")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    summary = payload.get("paymentsSummary") or {}
+    children_conn = summary.get("children") or {}
+    edges = children_conn.get("edges") or []
+    if not edges:
+        console.print("No payments summary entries.")
+        return
+    title = f"💳 Payments summary (full balance: {summary.get('fullBalance','')})"
+    table = Table(title=title)
+    table.add_column("Child")
+    table.add_column("Amount")
+    table.add_column("Paid")
+    table.add_column("Balance")
+    table.add_column("Paid bills")
+    for item in edges:
+        node = item.get("node", {}) or {}
+        child_name = f"{node.get('name','')} {node.get('surname','')}".strip()
+        table.add_row(
+            child_name or "-",
+            str(node.get("amount", "")),
+            str(node.get("paidAmount", "")),
+            str(node.get("balance", "")),
+            str(node.get("paidMonthlyBillsCount", "")),
+        )
+    console.print(table)
+
+
+@app.command("payment-orders")
+def payment_orders(
+    first: int = typer.Option(20, help="Number of orders."),
+    after: str | None = typer.Option(None, help="Cursor after."),
+    before: str | None = typer.Option(None, help="Cursor before."),
+    offset: int | None = typer.Option(None, help="Offset for pagination."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Fetch payment orders."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    variables: dict[str, object] = {
+        "first": first,
+        "after": after,
+        "before": before,
+        "offset": offset,
+    }
+    data = _execute_graphql(
+        settings, tokens, queries.PAYMENT_ORDERS, variables, context, label="paymentOrders"
+    )
+    payload = {"paymentOrders": data.get("paymentOrders")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    edges = (payload.get("paymentOrders") or {}).get("edges") or []
+    if not edges:
+        console.print("No payment orders.")
+        return
+    table = Table(title="💸 Payment orders")
+    table.add_column("ID")
+    table.add_column("Created")
+    table.add_column("Amount")
+    table.add_column("Status")
+    table.add_column("Booking date")
+    for item in edges:
+        node = item.get("node", {}) or {}
+        table.add_row(
+            str(node.get("id", "")),
+            str(node.get("created", "")),
+            str(node.get("amount", "")),
+            str(node.get("bluemediaPaymentStatus", "")),
+            str(node.get("bookingDate", "")),
+        )
+    console.print(table)
 
 
 @app.command()
@@ -395,16 +653,19 @@ def gallery_download(  # noqa: B008
         raise typer.Exit(code=1)
 
     try:
-        downloaded = _run(
-            download_all(
-                settings=settings,
-                tokens=tokens,
-                context=context,
-                gallery_ids=id_list,
-                output_dir=dest,
-                skip_downloaded=all_,
+        with make_progress() as progress:
+            downloaded = _run(
+                download_all(
+                    settings=settings,
+                    tokens=tokens,
+                    context=context,
+                    gallery_ids=id_list,
+                    output_dir=dest,
+                    skip_downloaded=all_,
+                    progress=progress,
+                    concurrency=4,
+                )
             )
-        )
     except Exception as exc:  # pragma: no cover - network/file errors
         console.print(f"[red]Download failed:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -459,18 +720,24 @@ def active_child(
         if not child:
             console.print("No active child.")
             return
-        table = Table(title="Active child", show_lines=True)
+        table = Table(title="👧 Active child")
         table.add_column("ID")
         table.add_column("Name")
         table.add_column("Surname")
         table.add_column("Status")
+        table.add_column("Group")
+        table.add_column("Balance")
         table.add_column("Preschool")
         preschool = (child.get("preschool") or {}).get("name", "")
+        group = (child.get("group") or {}).get("name", "")
+        balance = child.get("balance", "")
         table.add_row(
             str(child.get("id", "")),
             str(child.get("name", "")),
             str(child.get("surname", "")),
             str(child.get("status", "")),
+            str(group),
+            str(balance),
             str(preschool),
         )
         console.print(table)
@@ -498,7 +765,7 @@ def chat_users(
         if not users:
             console.print("No chat users.")
             return
-        table = Table(title="Chat users", show_lines=True)
+        table = Table(title="💬 Chat users")
         table.add_column("Name")
         table.add_column("Type")
         table.add_column("Position")
@@ -629,12 +896,23 @@ def observations(
 
 
 @app.command()
-def notifications(
+def notifications(  # noqa: PLR0913, PLR0915
     first: int = typer.Option(20, help="Number of notifications to fetch."),
     after: str | None = typer.Option(None, help="Cursor for pagination."),
     pending: bool | None = typer.Option(None, help="Pending filter (true/false)."),
     type_filter: str | None = typer.Option(
         None, "--type", help="Notification type (e.g., NEW_GALLERY, UPCOMING_EVENT, NEW_EVENT)."
+    ),
+    only_unread: bool = typer.Option(
+        False, "--only-unread", help="Filter to unread notifications (client-side)."
+    ),
+    mark_read: bool = typer.Option(
+        False, "--mark-read", help="Mark fetched notifications as read (uses notificationId)."
+    ),
+    all_pages: bool = typer.Option(
+        False,
+        "--all-pages",
+        help="Fetch all pages (honors type/pending filters) when marking read.",
     ),
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
@@ -642,29 +920,44 @@ def notifications(
     settings = Settings()
     tokens = _load_tokens(settings)
     context = ContextStore(settings.context_file).load()
-    variables: dict[str, object] = {
-        "first": first,
-        "after": after,
-        "pending": pending,
-    }
-    data = _execute_graphql(
-        settings, tokens, queries.NOTIFICATIONS, variables, context, label="notifications"
-    )
-    notif = data.get("notifications") or {}
-    edges = notif.get("edges") or []
-    if type_filter:
-        type_value = type_filter.upper()
-        edges = [item for item in edges if (item.get("node") or {}).get("type") == type_value]
-        notif = {**notif, "edges": edges}
-    payload = {"notifications": notif}
+    collected_edges: list[dict[str, Any]] = []
+    cursor = after
+
+    def _fetch_page(cur: str | None) -> dict[str, Any]:
+        variables: dict[str, object] = {
+            "first": first,
+            "after": cur,
+            "pending": pending,
+        }
+        return _execute_graphql(
+            settings, tokens, queries.NOTIFICATIONS, variables, context, label="notifications"
+        )
+
+    # paginate if requested
+    while True:
+        data = _fetch_page(cursor)
+        notif = data.get("notifications") or {}
+        edges = notif.get("edges") or []
+        if type_filter:
+            type_value = type_filter.upper()
+            edges = [item for item in edges if (item.get("node") or {}).get("type") == type_value]
+        if only_unread:
+            edges = [item for item in edges if not (item.get("node") or {}).get("isRead")]
+        collected_edges.extend(edges)
+        page_info = notif.get("pageInfo") or {}
+        if not all_pages or not page_info.get("hasNextPage"):
+            break
+        cursor = page_info.get("endCursor")
+
+    payload = {"notifications": {"edges": collected_edges}}
     if json_output:
         console.print_json(data=payload)
     else:
-        edges = (payload.get("notifications") or {}).get("edges") or []
+        edges = collected_edges
         if not edges:
             console.print("No notifications.")
             return
-        table = Table(title="Notifications")
+        table = Table(title="🔔 Notifications")
         table.add_column("Text")
         table.add_column("Type")
         table.add_column("Date")
@@ -684,6 +977,239 @@ def notifications(
                 str(node.get("notifyOn", "")),
                 "yes" if node.get("isRead") else "no",
                 str(data_date) if data_date else "-",
+            )
+        console.print(table)
+
+    if mark_read and collected_edges:
+        mutation = queries.SET_NOTIFICATION_READ
+        marked = 0
+        for item in collected_edges:
+            node = item.get("node") or {}
+            notif_id = (node.get("notification") or {}).get("id") or node.get("id")
+            if not notif_id:
+                continue
+            _execute_graphql(
+                settings,
+                tokens,
+                mutation,
+                {"notificationId": notif_id},
+                context,
+                label="setNotificationRead",
+            )
+            marked += 1
+        console.print(f"[green]Marked {marked} notifications as read.[/green]")
+
+
+def _normalize_date(value: str) -> str:
+    value = value.strip().lower()
+    if value == "today":
+        return date.today().isoformat()
+    if value == "tomorrow":
+        return (date.today() + timedelta(days=1)).isoformat()
+    if value == "yesterday":
+        return (date.today() - timedelta(days=1)).isoformat()
+    return value
+
+
+@app.command("quick-calendar")
+def quick_calendar(
+    date_from: str = typer.Option(
+        "today", help="Start date (YYYY-MM-DD) or 'today'/'tomorrow'/'yesterday'."
+    ),
+    date_to: str = typer.Option(
+        "today", help="End date (YYYY-MM-DD) or 'today'/'tomorrow'/'yesterday'."
+    ),
+    groups_ids: str = typer.Option("", help="Comma-separated group IDs."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Fetch quick calendar overview (has events/new/holiday/absent)."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+
+    variables: dict[str, object] = {
+        "groupsIds": [g for g in groups_ids.split(",") if g] or None,
+        "dateFrom": _normalize_date(date_from),
+        "dateTo": _normalize_date(date_to),
+    }
+    data = _execute_graphql(
+        settings, tokens, queries.QUICK_CALENDAR, variables, context, label="quickCalendar"
+    )
+    payload = {"quickCalendar": data.get("quickCalendar")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    items = payload.get("quickCalendar") or []
+    if not items:
+        console.print("No quick calendar entries.")
+        return
+    table = Table(title="📅 Quick calendar")
+    table.add_column("Date")
+    table.add_column("Has events")
+    table.add_column("New events")
+    table.add_column("Holiday")
+    table.add_column("Absent")
+    table.add_column("Meals modified")
+    for node in items:
+        table.add_row(
+            str(node.get("date", "")),
+            "yes" if node.get("hasEvents") else "no",
+            "yes" if node.get("hasNewEvents") else "no",
+            "yes" if node.get("holiday") else "no",
+            "yes" if node.get("absent") else "no",
+            "yes" if node.get("mealsModified") else "no",
+        )
+    console.print(table)
+
+
+@app.command()
+def schedule(
+    group_id: str = typer.Option(..., "--group-id", help="Group ID for schedule (required)."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Fetch schedule for a group."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    variables: dict[str, object] = {"group": group_id}
+    data = _execute_graphql(
+        settings, tokens, queries.SCHEDULE, variables, context, label="schedule"
+    )
+    payload = {"schedule": data.get("schedule")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    items = payload.get("schedule") or []
+    if not items:
+        console.print("No schedule entries.")
+        return
+    table = Table(title="🗓️ Schedule")
+    table.add_column("Title")
+    table.add_column("Start")
+    table.add_column("End")
+    table.add_column("All day")
+    table.add_column("Type")
+    table.add_column("Groups")
+    for node in items:
+        table.add_row(
+            str(node.get("title", "")),
+            str(node.get("startDate", "")),
+            str(node.get("endDate", "")),
+            "yes" if node.get("allDay") else "no",
+            str(node.get("type", "")),
+            ", ".join(node.get("groupsNames") or [])
+            if isinstance(node.get("groupsNames"), list)
+            else str(node.get("groupsNames", "")),
+        )
+    console.print(table)
+
+
+@app.command()
+def absence(  # noqa: PLR0913
+    child_id: str | None = typer.Option(None, help="Child ID (defaults to context child)."),
+    date_val: str = typer.Option(
+        "today", "--date", help="Date YYYY-MM-DD or today/tomorrow/yesterday"
+    ),
+    date_to: str | None = typer.Option(None, "--date-to", help="Optional end date."),
+    on_time: bool = typer.Option(True, "--on-time/--not-on-time", help="Reported on time."),
+    partial_meal_refund: bool = typer.Option(
+        False, "--partial-meal-refund/--no-partial-meal-refund", help="Partial meal refund."
+    ),
+    force_partial_refund: bool = typer.Option(
+        False,
+        "--force-partial-meal-refund/--no-force-partial-meal-refund",
+        help="Force partial meal refund.",
+    ),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Report child absence (setChildAbsence)."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    effective_child = child_id or (context.child_id if context else None)
+    if not effective_child:
+        console.print("[red]Child ID required (pass --child-id or set context).[/red]")
+        raise typer.Exit(code=1)
+    variables: dict[str, object] = {
+        "childId": effective_child,
+        "date": _normalize_date(date_val),
+        "dateTo": _normalize_date(date_to) if date_to else None,
+        "onTime": on_time,
+        "partialMealRefund": partial_meal_refund,
+        "forcePartialMealRefund": force_partial_refund,
+    }
+    data = _execute_graphql(
+        settings, tokens, queries.SET_CHILD_ABSENCE, variables, context, label="setChildAbsence"
+    )
+    if json_output:
+        console.print_json(data=data)
+    else:
+        console.print("[green]Absence reported.[/green]")
+
+
+@app.command("notification-prefs")
+def notification_prefs(
+    enable: list[str] = typer.Option(
+        None,
+        "--enable",
+        help="Enable notification types (repeatable, e.g., --enable NEW_EVENT).",
+    ),
+    disable: list[str] = typer.Option(
+        None,
+        "--disable",
+        help="Disable notification types (repeatable, e.g., --disable NEW_GALLERY).",
+    ),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """Show or update notification preferences."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+
+    def _list_prefs() -> list[dict[str, Any]]:
+        data = _execute_graphql(
+            settings,
+            tokens,
+            queries.USER_NOTIFICATION_PREFERENCES,
+            {},
+            context,
+            label="notification-prefs",
+        )
+        prefs = data.get("userNotificationPreferences") or []
+        return prefs if isinstance(prefs, list) else []
+
+    changes: list[dict[str, object]] = []
+    for name in enable or []:
+        changes.append({"notificationType": name.upper(), "enabled": True})
+    for name in disable or []:
+        changes.append({"notificationType": name.upper(), "enabled": False})
+
+    if changes:
+        _execute_graphql(
+            settings,
+            tokens,
+            queries.SET_USER_NOTIFICATION_PREFERENCES,
+            {"preferences": changes},
+            context,
+            label="setUserNotificationPreferences",
+        )
+
+    prefs = _list_prefs()
+    if json_output:
+        console.print_json(data={"notificationPreferences": prefs})
+    else:
+        if not prefs:
+            console.print("No notification preferences found.")
+            return
+        table = Table(title="🔔 Notification preferences")
+        table.add_column("Type")
+        table.add_column("Name")
+        table.add_column("Enabled")
+        for pref in prefs:
+            table.add_row(
+                str(pref.get("type", "")),
+                str(pref.get("name", "")),
+                "yes" if pref.get("enabled") else "no",
             )
         console.print(table)
 
@@ -710,7 +1236,7 @@ def applications(
         if not edges:
             console.print("No applications.")
             return
-        table = Table(title="Applications", show_lines=True)
+        table = Table(title="📝 Applications", show_lines=True)
         table.add_column("ID")
         table.add_column("Created")
         table.add_column("Form name")
@@ -745,44 +1271,57 @@ def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
         return
 
     me_data: dict[str, Any] = payload.get("me") or {}
-    summary = Table(title="Me", show_header=False)
+    summary = Table(title="🙋 Me", show_header=False)
+    summary.add_row("ID", str(me_data.get("id", "")))
     summary.add_row("Full name", str(me_data.get("fullName", "")))
     summary.add_row("Email", str(me_data.get("email", "")))
     summary.add_row("Phone", str(me_data.get("phone", "")))
     summary.add_row("Position", str(me_data.get("userPosition", "")))
     summary.add_row("Type", str(me_data.get("userType", "")))
+    unread = []
+    if me_data.get("unreadNotificationsCount") is not None:
+        unread.append(f"notifications: {me_data['unreadNotificationsCount']}")
+    if me_data.get("unreadMessagesCount") is not None:
+        unread.append(f"messages: {me_data['unreadMessagesCount']}")
+    if unread:
+        summary.add_row("Unread", ", ".join(unread))
     console.print(summary)
 
     children = me_data.get("children") or []
     if children:
-        ctable = Table(title="Children", show_lines=True)
+        ctable = Table(title="👶 Children")
         ctable.add_column("ID")
         ctable.add_column("Name")
         ctable.add_column("Surname")
         ctable.add_column("Group")
+        ctable.add_column("Balance")
         for child in children:
             group_name = (child.get("group") or {}).get("name", "")
+            balance = child.get("balance", "")
             ctable.add_row(
                 str(child.get("id", "")),
                 str(child.get("name", "")),
                 str(child.get("surname", "")),
                 str(group_name),
+                str(balance),
             )
         console.print(ctable)
 
     preschools = me_data.get("availablePreschools") or []
     if preschools:
-        ptable = Table(title="Preschools", show_lines=True)
+        ptable = Table(title="🏫 Preschools")
         ptable.add_column("ID")
         ptable.add_column("Name")
         ptable.add_column("Phone")
         ptable.add_column("Email")
+        ptable.add_column("Address")
         for pre in preschools:
             ptable.add_row(
                 str(pre.get("id", "")),
                 str(pre.get("name", "")),
                 str(pre.get("phone", "")),
                 str(pre.get("email", "")),
+                str(pre.get("address", "")),
             )
         console.print(ptable)
 
@@ -848,16 +1387,6 @@ def calendar(  # noqa: PLR0913
     activity_type_list = (
         [int(x) for x in activity_types.split(",") if x.strip()] if activity_types else None
     )
-
-    def _normalize_date(value: str) -> str:
-        value = value.strip().lower()
-        if value == "today":
-            return date.today().isoformat()
-        if value == "tomorrow":
-            return (date.today() + timedelta(days=1)).isoformat()
-        if value == "yesterday":
-            return (date.today() - timedelta(days=1)).isoformat()
-        return value
 
     variables: dict[str, object] = {
         "groupsIds": groups_list or None,
@@ -982,7 +1511,7 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
     if json_output:
         console.print_json(data=payload)
     else:
-        ctx_table = Table(title="Context", show_header=False)
+        ctx_table = Table(title="🧭 Context", show_header=False)
         ctx_table.add_row("Child ID", str(ctx.child_id or "-"))
         ctx_table.add_row("Preschool ID", str(ctx.preschool_id or "-"))
         ctx_table.add_row("Year ID", str(ctx.year_id or "-"))

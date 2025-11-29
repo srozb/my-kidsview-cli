@@ -5,7 +5,7 @@ import respx
 from httpx import Response
 
 from kidsview_cli.config import Settings
-from kidsview_cli.download import download_all, sanitize_name, target_dir
+from kidsview_cli.download import download_all, make_progress, sanitize_name, target_dir
 from kidsview_cli.session import AuthTokens
 
 
@@ -42,17 +42,20 @@ def test_download_all_skips_existing(tmp_path: Path) -> None:
     respx.get("https://example.com/img1.jpg").mock(return_value=Response(200, content=b"1"))
     respx.get("https://example.com/img2.jpg").mock(return_value=Response(200, content=b"2"))
 
-    downloaded = asyncio.run(
-        download_all(
-            settings=settings,
-            tokens=tokens,
-            context=None,
-            gallery_ids=[],
-            output_dir=tmp_path,
-            skip_downloaded=True,
-            galleries=galleries,
+    with make_progress() as progress:
+        downloaded = asyncio.run(
+            download_all(
+                settings=settings,
+                tokens=tokens,
+                context=None,
+                gallery_ids=[],
+                output_dir=tmp_path,
+                skip_downloaded=True,
+                galleries=galleries,
+                progress=progress,
+                concurrency=2,
+            )
         )
-    )
 
     # g1 skipped, g2 downloaded
     assert len(downloaded) == 1

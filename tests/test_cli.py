@@ -6,6 +6,7 @@ from httpx import Response
 from typer.testing import CliRunner
 
 from kidsview_cli.cli import app
+from kidsview_cli.context import Context, ContextStore
 from kidsview_cli.session import AuthTokens, SessionStore
 
 runner = CliRunner()
@@ -148,6 +149,409 @@ def test_notifications_filter_and_pretty(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "UPCOMING_EVENT" in result.stdout
     assert "NEW_EVENT" not in result.stdout
+
+
+@respx.mock
+def test_notifications_only_unread_and_mark(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    requests: list[dict] = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if "notifications" in payload.get("query", ""):
+            return Response(
+                200,
+                json={
+                    "data": {
+                        "notifications": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "n1",
+                                        "isRead": False,
+                                        "notification": {"id": "N1"},
+                                    }
+                                },
+                                {
+                                    "node": {
+                                        "id": "n2",
+                                        "isRead": True,
+                                        "notification": {"id": "N2"},
+                                    }
+                                },
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                },
+            )
+        return Response(200, json={"data": {"setNotificationRead": {"success": True}}})
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["notifications", "--only-unread", "--mark-read", "--pending"])
+    assert result.exit_code == 0
+    # Only unread should be marked
+    mut_calls = [r for r in requests if "setNotificationRead" in r.get("query", "")]
+    assert mut_calls
+    assert mut_calls[0]["variables"]["notificationId"] == "N1"
+
+
+@respx.mock
+def test_notifications_mark_read_paginates(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    call_count = {"n": 0}
+
+    def handler(request):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return Response(
+                200,
+                json={
+                    "data": {
+                        "notifications": {
+                            "edges": [{"node": {"id": "node1", "notification": {"id": "notif1"}}}],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "CUR1"},
+                        }
+                    }
+                },
+            )
+        if call_count["n"] == 2:
+            return Response(
+                200,
+                json={
+                    "data": {
+                        "notifications": {
+                            "edges": [{"node": {"id": "node2", "notification": {"id": "notif2"}}}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                },
+            )
+        return Response(200, json={"data": {"setNotificationRead": {"success": True}}})
+
+    route = respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["notifications", "--mark-read", "--all-pages", "--pending"])
+    assert result.exit_code == 0
+    assert route.called
+    mut_calls = [c for c in route.calls if b"setNotificationRead" in c.request.content]
+    mut_vars = [json.loads(c.request.content)["variables"] for c in mut_calls]
+    assert {"notificationId": "notif1"} in mut_vars
+    assert {"notificationId": "notif2"} in mut_vars
+
+
+@respx.mock
+def test_notification_prefs_set_and_list(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    seen_requests: list[dict] = []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        seen_requests.append(payload)
+        if "setUserNotificationPreferences" in payload.get("query", ""):
+            return Response(
+                200, json={"data": {"setUserNotificationPreferences": {"success": True}}}
+            )
+        return Response(
+            200,
+            json={
+                "data": {
+                    "userNotificationPreferences": [
+                        {"type": "NEW_EVENT", "name": "Nowe wydarzenie", "enabled": True}
+                    ]
+                }
+            },
+        )
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["notification-prefs", "--disable", "UPCOMING_EVENT", "--json"])
+    assert result.exit_code == 0
+    assert "NEW_EVENT" in result.stdout
+    # First request is mutation; ensure variable shape
+    first_payload = seen_requests[0]
+    assert first_payload["variables"]["preferences"][0] == {
+        "notificationType": "UPCOMING_EVENT",
+        "enabled": False,
+    }
+
+
+@respx.mock
+def test_quick_calendar(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "quickCalendar": [
+                        {
+                            "date": "2025-12-01",
+                            "hasEvents": True,
+                            "hasNewEvents": False,
+                            "holiday": False,
+                            "absent": True,
+                            "mealsModified": False,
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["quick-calendar", "--json"])
+    assert result.exit_code == 0
+    assert "quickCalendar" in result.stdout
+
+
+@respx.mock
+def test_schedule(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "schedule": [
+                        {
+                            "title": "Math",
+                            "startDate": "2025-12-01T08:00:00",
+                            "endDate": "2025-12-01T09:00:00",
+                            "allDay": False,
+                            "type": 1,
+                            "groupsNames": ["Group A"],
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["schedule", "--group-id", "G1"])
+    assert result.exit_code == 0
+    assert "Math" in result.stdout
+
+
+@respx.mock
+def test_payments_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "payments": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "title": "Payment A",
+                                    "amount": "123.45",
+                                    "paymentDate": "2025-12-01",
+                                    "type": "TRANSFER",
+                                    "isBooked": True,
+                                    "child": {"name": "H", "surname": "R"},
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["payments"])
+    assert result.exit_code == 0
+    assert "Payment A" in result.stdout
+
+
+@respx.mock
+def test_absence_uses_context_child(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    context_path = tmp_path / "context.json"
+    ContextStore(context_path).save(Context(child_id="CHILD1"))
+    monkeypatch.setenv("KIDSVIEW_CONTEXT_FILE", str(context_path))
+
+    captured: dict | None = None
+
+    def handler(request):
+        nonlocal captured
+        captured = json.loads(request.content)
+        return Response(200, json={"data": {"setChildAbsence": {"success": True}}})
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["absence", "--date", "2025-12-01"])
+    assert result.exit_code == 0
+    assert captured is not None
+    assert captured["variables"]["childId"] == "CHILD1"
+    assert captured["variables"]["date"] == "2025-12-01"
+
+
+@respx.mock
+def test_gallery_like(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+
+    reqs: list[dict] = []
+
+    def handler(request):
+        reqs.append(json.loads(request.content))
+        return Response(200, json={"data": {"setGalleryLike": {"success": True, "isLiked": True}}})
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["gallery-like", "--id", "G1"])
+    assert result.exit_code == 0
+    assert reqs[0]["variables"]["galleryId"] == "G1"
+
+
+@respx.mock
+def test_gallery_comment(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+
+    reqs: list[dict] = []
+
+    def handler(request):
+        reqs.append(json.loads(request.content))
+        return Response(
+            200, json={"data": {"createGalleryComment": {"galleryComment": {"id": "C1"}}}}
+        )
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["gallery-comment", "--id", "G1", "--content", "Nice"])
+    assert result.exit_code == 0
+    assert reqs[0]["variables"] == {"galleryId": "G1", "content": "Nice"}
+
+
+@respx.mock
+def test_application_submit(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    reqs: list[dict] = []
+
+    def handler(request):
+        reqs.append(json.loads(request.content))
+        return Response(200, json={"data": {"createApplication": {"success": True, "id": "APP1"}}})
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(
+        app,
+        ["application-submit", "--form-id", "FORM1", "--comment", "Ok", "--months", "3"],
+    )
+    assert result.exit_code == 0
+    vars = reqs[0]["variables"]
+    assert vars["applicationFormId"] == "FORM1"
+    assert vars["commentParent"] == "Ok"
+    assert vars["months"] == 3
+
+
+@respx.mock
+def test_payments_summary_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "paymentsSummary": {
+                        "fullBalance": "100.00",
+                        "children": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "name": "H",
+                                        "surname": "R",
+                                        "amount": "50.00",
+                                        "paidAmount": "30.00",
+                                        "balance": "20.00",
+                                        "paidMonthlyBillsCount": 5,
+                                    }
+                                }
+                            ],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        },
+                    }
+                }
+            },
+        )
+    )
+
+    result = runner.invoke(app, ["payments-summary"])
+    assert result.exit_code == 0
+    assert "H R" in result.stdout
+
+
+@respx.mock
+def test_payment_orders_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "paymentOrders": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "PO1",
+                                    "created": "2025-12-01",
+                                    "amount": "123.00",
+                                    "bluemediaPaymentStatus": "PENDING",
+                                    "bookingDate": None,
+                                }
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["payment-orders"])
+    assert result.exit_code == 0
+    assert "PO1" in result.stdout
+
+
+@respx.mock
+def test_payments_summary_permission_denied(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    # Remove refresh token to avoid refresh branch interfering with message
+    SessionStore(session_path).save(
+        AuthTokens(id_token="IDTOKEN", access_token="ACCESSTOKEN", refresh_token=None)
+    )
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "errors": [
+                    {
+                        "message": "Odmowa dostępu lub brak uprawnień",
+                        "locations": [{"line": 12, "column": 3}],
+                        "path": ["paymentsSummary"],
+                    }
+                ],
+                "data": {"paymentsSummary": None},
+            },
+        )
+    )
+
+    result = runner.invoke(app, ["payments-summary"])
+    assert result.exit_code != 0
+    assert "access denied" in result.stdout.lower() or "odmowa dostępu" in result.stdout.lower()
 
 
 @respx.mock

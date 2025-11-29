@@ -26,7 +26,7 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 - Rachunki miesięczne: `uv run kidsview-cli monthly-bills --year WWVhck5vZGU6MjM4OA== --is-paid true`
 - Galerie: `uv run kidsview-cli galleries --first 3`
 - Pobierz galerie: `uv run kidsview-cli gallery-download --all --output-dir galleries` lub `--ids g1,g2`
-- Dziecko (skrót): `uv run kidsview-cli active-child`
+- Dziecko (skrót): `uv run kidsview-cli active-child` (id, grupa, saldo)
 - Dziecko (szczegóły + aktywności): `uv run kidsview-cli active-child --detailed --date-from 2025-11-23 --date-to 2025-11-28`
 - Użytkownicy czatu: `uv run kidsview-cli chat-users`
 - Szukaj w czacie: `uv run kidsview-cli chat-search --search olga`
@@ -37,6 +37,15 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 - Dieta dziecka: `uv run kidsview-cli meals`
 - Wnioski (applications): `uv run kidsview-cli applications --phrase "" --status ""`
 - Powiadomienia (notifications): `uv run kidsview-cli notifications --first 20 --pending true`
+- Płatności: `uv run kidsview-cli payments --date-from 2025-12-01 --date-to 2025-12-31`
+- Zgłoszenie nieobecności: `uv run kidsview-cli absence --date today` (domyślnie użyje dziecka z kontekstu)
+- Polubienie galerii: `uv run kidsview-cli gallery-like --id <GALLERY_ID>`
+- Komentarz do galerii: `uv run kidsview-cli gallery-comment --id <GALLERY_ID> --content "Super"`
+- Złożenie wniosku: `uv run kidsview-cli application-submit --form-id <FORM_ID> --comment "..." --months 3`
+- Podsumowanie płatności: `uv run kidsview-cli payments-summary --search ""`
+- Zlecenia płatności: `uv run kidsview-cli payment-orders --first 20`
+- Szybki kalendarz: `uv run kidsview-cli quick-calendar --today --tomorrow`
+- Plan grupy: `uv run kidsview-cli schedule --group-id <ID>`
 - Kalendarz: `uv run kidsview-cli calendar --date-from 2025-11-01 --date-to 2025-11-30 --activity-types 0,1,5,9`
 - Obserwacje zajęć dodatkowych: `uv run kidsview-cli observations --child-id <id_dziecka>`
 
