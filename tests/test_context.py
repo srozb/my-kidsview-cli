@@ -45,16 +45,13 @@ def test_context_auto_no_interactive_picks_first(tmp_path: Path, monkeypatch) ->
         side_effect=[
             Response(
                 200,
-                json=_mock_me(
-                    [{"id": "child1", "name": "A"}, {"id": "child2", "name": "B"}],
-                    [{"id": "pre1", "name": "P1"}, {"id": "pre2", "name": "P2"}],
-                ),
+                json=_mock_me([{"id": "child1", "name": "A"}], [{"id": "pre1", "name": "P1"}]),
             ),
             Response(200, json=_mock_years([{"id": "year1", "displayName": "2024/25"}])),
         ]
     )
 
-    result = runner.invoke(app, ["context", "--auto", "--no-interactive"])
+    result = runner.invoke(app, ["context", "--auto"])
     assert result.exit_code == 0
 
     ctx = ContextStore(settings.context_file).load()
@@ -92,7 +89,7 @@ def test_context_auto_interactive_prompts_and_saves(tmp_path: Path, monkeypatch)
     )
 
     # Choose child2 (index 2), preschool pre2 (index 2), year2 (index 2)
-    result = runner.invoke(app, ["context", "--auto"], input="2\n2\n2\n")
+    result = runner.invoke(app, ["context", "--auto", "--change"], input="2\n2\n2\n")
     assert result.exit_code == 0
 
     ctx = ContextStore(settings.context_file).load()

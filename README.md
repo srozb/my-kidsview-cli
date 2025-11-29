@@ -9,7 +9,7 @@ CLI do platformy Kidsview (obecności, oceny, posiłki, czesne, kalendarz, wiado
 4. Podstawowe logowanie: `uv run kidsview-cli login` (zapisze tokeny w `~/.config/kidsview-cli/session.json`).
 5. Ustaw kontekst automatycznie (placówka/dziecko/rok → ciasteczka):
    `uv run kidsview-cli context --auto`
-   Jeśli jest wiele opcji, CLI zapyta interaktywnie (Rich). Wybrane wartości zapisze do `~/.config/kidsview-cli/context.json` i będzie ich używać do budowy ciasteczek dla wszystkich zapytań.
+   Jeśli jest wiele opcji, CLI zapyta interaktywnie (Rich); pojedyncze wybiera automatycznie. Aby wymusić ponowny wybór mimo istniejącego kontekstu, użyj `--change`. Wybrane wartości zapisze do `~/.config/kidsview-cli/context.json` i będzie ich używać do budowy ciasteczek dla wszystkich zapytań.
 
 ## Konfiguracja uwierzytelniania
 - Region: `eu-west-1`

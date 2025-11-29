@@ -1439,8 +1439,8 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
     year_id: str | None = typer.Option(None, help="Year ID (years query)."),
     auto: bool = typer.Option(False, "--auto", help="Pick first available context values."),
     clear: bool = typer.Option(False, "--clear", help="Clear saved context."),
-    interactive: bool = typer.Option(
-        True, "--interactive/--no-interactive", help="Interactive selection with prompts."
+    change: bool = typer.Option(
+        False, "--change", help="Re-pick context interactively even if already set."
     ),
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
@@ -1460,6 +1460,10 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
         raise typer.Exit(code=1)
 
     ctx = ctx_store.load() or Context()
+    if change:
+        # force re-selection
+        auto = True
+        ctx = Context(locale=ctx.locale)
 
     if auto:
         try:
@@ -1472,15 +1476,15 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
         preschools = me_payload.get("availablePreschools") or []
         if children and ctx.child_id is None:
             ctx.child_id = (
-                _prompt_choice(children, "Children", "name")
-                if interactive
-                else children[0].get("id")
+                children[0].get("id")
+                if len(children) == 1
+                else _prompt_choice(children, "Children", "name")
             )
         if preschools and ctx.preschool_id is None:
             ctx.preschool_id = (
-                _prompt_choice(preschools, "Preschools", "name")
-                if interactive
-                else preschools[0].get("id")
+                preschools[0].get("id")
+                if len(preschools) == 1
+                else _prompt_choice(preschools, "Preschools", "name")
             )
 
         # Fetch years after preschool is chosen (backend wymaga preschool w sesji).
@@ -1493,9 +1497,9 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
         years_list = years_payload.get("years") or []
         if years_list and ctx.year_id is None:
             ctx.year_id = (
-                _prompt_choice(years_list, "Lata", "displayName")
-                if interactive
-                else years_list[0].get("id")
+                years_list[0].get("id")
+                if len(years_list) == 1
+                else _prompt_choice(years_list, "Lata", "displayName")
             )
 
     # Manual overrides
