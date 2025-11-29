@@ -41,7 +41,7 @@ async def download_gallery(
 ) -> Path:
     gid = str(gallery.get("id"))
     name = str(gallery.get("name", gid))
-    images = (((gallery.get("paginatedImages") or {}).get("edges")) or [])
+    images = ((gallery.get("paginatedImages") or {}).get("edges")) or []
     image_urls: list[str] = []
     for img in images:
         node = img.get("node", {})

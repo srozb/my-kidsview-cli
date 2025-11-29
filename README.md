@@ -1,12 +1,15 @@
 # kidsview-cli
 
-Polski CLI do platformy Kidsview (obecności, oceny, posiłki, czesne, kalendarz, wiadomości) przeznaczony dla ludzi i automatyzacji (np. Home Assistant, MQTT).
+CLI do platformy Kidsview (obecności, oceny, posiłki, czesne, kalendarz, wiadomości) przeznaczony dla ludzi i automatyzacji (np. Home Assistant, MQTT).
 
 ## Szybki start
 1. Wymagania: Python 3.11+, `uv` zainstalowany globalnie.
 2. Instalacja zależności: `uv sync`.
 3. Uruchom pomoc: `uv run kidsview-cli --help` (alias: `uv run kv-cli --help`).
 4. Podstawowe logowanie: `uv run kidsview-cli login` (zapisze tokeny w `~/.config/kidsview-cli/session.json`).
+5. Ustaw kontekst automatycznie (placówka/dziecko/rok → ciasteczka):
+   `uv run kidsview-cli context --auto`
+   Jeśli jest wiele opcji, CLI zapyta interaktywnie (Rich). Wybrane wartości zapisze do `~/.config/kidsview-cli/context.json` i będzie ich używać do budowy ciasteczek dla wszystkich zapytań.
 
 ## Konfiguracja uwierzytelniania
 - Region: `eu-west-1`
@@ -38,10 +41,11 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 - Obserwacje zajęć dodatkowych: `uv run kidsview-cli observations --child-id <id_dziecka>`
 
 ## Kontekst cookies i tokeny
-- Niektóre zapytania wymagają kontekstu dziecka/grupy. Dodaj ciasteczka:
-  `KIDSVIEW_COOKIES="active_child=...; active_year=...; preschool=...; locale=pl" uv run kidsview-cli ...`
+- CLI automatycznie buduje ciasteczka z kontekstu zapisanego w `~/.config/kidsview-cli/context.json` (ustaw `kidsview-cli context --auto` lub ręcznie podaj `--child-id/--preschool-id/--year-id`). Nie musisz ręcznie wklejać ciasteczek.
+- Jeśli potrzebujesz nadpisać ciasteczka, możesz użyć `KIDSVIEW_COOKIES="active_child=...; active_year=...; preschool=...; locale=pl"` – wtedy CLI użyje ich zamiast kontekstu.
 - Domyślnie nagłówek `Authorization: JWT <id_token>`. Aby wymusić access token:
   `KIDSVIEW_AUTH_TOKEN_PREFERENCE=access uv run kidsview-cli ...`
+- Domyślny katalog pobierania galerii: `~/Pictures/Kidsview` (zmień przez `KIDSVIEW_DOWNLOAD_DIR` lub `--output-dir`).
 
 ## Użycie programistyczne (jako moduł)
 ```python

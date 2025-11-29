@@ -106,3 +106,105 @@ def test_chat_send_uses_recipients(tmp_path: Path, monkeypatch) -> None:
     assert sent["json"]["variables"]["input"]["message"]["text"] == "hi"
     assert sent["json"]["variables"]["input"]["parentsMutualVisibility"] is False
     assert sent["headers"]["Authorization"] == "JWT IDTOKEN"
+
+
+@respx.mock
+def test_notifications_filter_and_pretty(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    notif_payload = {
+        "data": {
+            "notifications": {
+                "edges": [
+                    {
+                        "node": {
+                            "title": "A",
+                            "text": "foo",
+                            "type": "UPCOMING_EVENT",
+                            "notifyOn": "2025-01-01",
+                            "allDay": True,
+                            "data": '{"date":"2025-01-01"}',
+                        }
+                    },
+                    {
+                        "node": {
+                            "title": "B",
+                            "text": "bar",
+                            "type": "NEW_EVENT",
+                            "notifyOn": "2025-01-02",
+                            "allDay": False,
+                            "data": '{"date":"2025-01-02"}',
+                        }
+                    },
+                ]
+            }
+        }
+    }
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(200, json=notif_payload)
+    )
+    result = runner.invoke(app, ["notifications", "--type", "upcoming_event"])
+
+    assert result.exit_code == 0
+    assert "UPCOMING_EVENT" in result.stdout
+    assert "NEW_EVENT" not in result.stdout
+
+
+@respx.mock
+def test_calendar_pretty(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    cal_payload = {
+        "data": {
+            "calendar": [
+                {
+                    "title": "Nieobecność",
+                    "startDate": "2025-10-14T00:00:00",
+                    "endDate": "2025-10-14T00:00:00",
+                    "type": 5,
+                    "allDay": True,
+                    "absenceReportedBy": {"fullName": "Reporter"},
+                }
+            ]
+        }
+    }
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(200, json=cal_payload)
+    )
+    result = runner.invoke(app, ["calendar", "--date-from", "today", "--date-to", "today"])
+
+    assert result.exit_code == 0
+    assert "Nieobecność" in result.stdout
+    assert "Reporter" in result.stdout
+
+
+@respx.mock
+def test_me_pretty(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    me_payload = {
+        "data": {
+            "me": {
+                "fullName": "R S",
+                "email": "email@domain.eu",
+                "phone": "123",
+                "userPosition": "Opiekun",
+                "userType": "parent",
+                "children": [
+                    {"id": "c1", "name": "H", "surname": "R", "group": {"name": "Klasa 2"}}
+                ],
+                "availablePreschools": [
+                    {"id": "p1", "name": "PS1", "phone": "111", "email": "ps1@example.com"}
+                ],
+            }
+        }
+    }
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(200, json=me_payload)
+    )
+    result = runner.invoke(app, ["me"])
+
+    assert result.exit_code == 0
+    assert "R S" in result.stdout
+    assert "Klasa 2" in result.stdout
+    assert "PS1" in result.stdout

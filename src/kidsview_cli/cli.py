@@ -193,7 +193,7 @@ def graphql(
     variables: str | None = typer.Option(
         None, "--vars", "-v", help="Variables as JSON string (e.g. '{\"id\":1}')."
     ),
-    json_output: bool = typer.Option(True, "--json/--no-json", help="Print response as JSON."),
+    json_output: bool = typer.Option(False, "--json/--no-json", help="Print response as JSON."),
 ) -> None:
     """Execute a GraphQL query against Kidsview backend using cached tokens."""
     settings = Settings()
@@ -232,7 +232,7 @@ def announcements(
     after: str | None = typer.Option(None, help="Cursor for pagination."),
     status: str = typer.Option("ACTIVE", help="AnnouncementStatus value."),
     phrase: str = typer.Option("", help="Search phrase."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch announcements."""
     settings = Settings()
@@ -278,7 +278,7 @@ def monthly_bills(  # noqa: PLR0913
     is_paid: bool | None = typer.Option(True, help="Filter by paid status."),
     first: int = typer.Option(10, help="Items to fetch."),
     after: str | None = typer.Option(None, help="Cursor for pagination."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch monthly bills."""
     settings = Settings()
@@ -331,7 +331,7 @@ def galleries(  # noqa: PLR0913
     after: str | None = typer.Option(None, help="Cursor for pagination."),
     search: str = typer.Option("", help="Search phrase."),
     order: str | None = typer.Option(None, help="Order string."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch galleries."""
     settings = Settings()
@@ -376,13 +376,17 @@ def galleries(  # noqa: PLR0913
 def gallery_download(  # noqa: B008
     ids: str = typer.Option("", "--ids", help="Comma-separated gallery IDs."),
     all_: bool = typer.Option(False, "--all", help="Download all galleries not yet downloaded."),
-    output_dir: Path = typer.Option("galleries", help="Output directory for downloads."),
+    output_dir: Path | None = typer.Option(
+        None,
+        help="Output dir (default KIDSVIEW_DOWNLOAD_DIR or ~/Pictures/Kidsview).",
+    ),
 ) -> None:
     """Download gallery images."""
     settings = Settings()
     tokens = _load_tokens(settings)
     context = ContextStore(settings.context_file).load()
-    dest = Path(output_dir).expanduser()
+    dest_base = output_dir or settings.download_dir
+    dest = Path(dest_base).expanduser()
     dest.mkdir(parents=True, exist_ok=True)
 
     id_list = [i.strip() for i in ids.split(",") if i.strip()]
@@ -421,7 +425,7 @@ def active_child(
         None, help="Start date (YYYY-MM-DD) for daily activities."
     ),
     date_to: str | None = typer.Option(None, help="End date (YYYY-MM-DD) for daily activities."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch active child summary or detailed info (requires date range)."""
     settings = Settings()
@@ -451,41 +455,68 @@ def active_child(
     if json_output:
         console.print_json(data=payload)
     else:
-        console.print(Pretty(payload))
+        child = payload.get("activeChild") or {}
+        if not child:
+            console.print("No active child.")
+            return
+        table = Table(title="Active child", show_lines=True)
+        table.add_column("ID")
+        table.add_column("Name")
+        table.add_column("Surname")
+        table.add_column("Status")
+        table.add_column("Preschool")
+        preschool = (child.get("preschool") or {}).get("name", "")
+        table.add_row(
+            str(child.get("id", "")),
+            str(child.get("name", "")),
+            str(child.get("surname", "")),
+            str(child.get("status", "")),
+            str(preschool),
+        )
+        console.print(table)
 
 
 @app.command()
 def chat_users(
-    user_types: str = typer.Option("", help="Comma-separated user types; empty for all."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    user_types: str = typer.Option("", "--type", help="Comma-separated user types; empty for all."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch users available for chat."""
     settings = Settings()
-    tokens = SessionStore(settings.session_file).load()
-    if not tokens:
-        console.print("[red]No session found. Run `kidsview-cli login` first.[/red]")
-        raise typer.Exit(code=1)
-
+    tokens = _load_tokens(settings)
     types_list = [u for u in user_types.split(",") if u] if user_types else []
     variables = {"userTypes": types_list}
     context = ContextStore(settings.context_file).load()
-    client = GraphQLClient(settings, tokens, context=context)
-    try:
-        data = asyncio.run(client.execute(queries.USERS_FOR_CHAT, variables))
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    data = _execute_graphql(
+        settings, tokens, queries.USERS_FOR_CHAT, variables, context, label="chat_users"
+    )
     payload = {"usersForChat": data.get("usersForChat")}
     if json_output:
         console.print_json(data=payload)
     else:
-        console.print(Pretty(payload))
+        users = payload.get("usersForChat") or []
+        if not users:
+            console.print("No chat users.")
+            return
+        table = Table(title="Chat users", show_lines=True)
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Position")
+        table.add_column("Role")
+        for user in users:
+            table.add_row(
+                str(user.get("chatDisplayName", "")),
+                str(user.get("userType", "")),
+                str(user.get("chatUserPosition", "")),
+                str(user.get("roleName", "")),
+            )
+        console.print(table)
 
 
 @app.command()
 def chat_search(
     search: str = typer.Option("", help="Search phrase for chat groups/children/parents."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Search chat groups and parents (groupsForChat)."""
     settings = Settings()
@@ -519,7 +550,7 @@ def chat_send(
     parents_mutual_visibility: bool = typer.Option(
         False, "--parents-visible/--parents-hidden", help="Parents mutual visibility flag."
     ),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Send a chat message (creates a thread)."""
     settings = Settings()
@@ -552,7 +583,7 @@ def chat_send(
 
 
 @app.command()
-def meals(json_output: bool = typer.Option(True, "--json/--no-json")) -> None:
+def meals(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch current diet info for active child."""
     settings = Settings()
     tokens = _load_tokens(settings)
@@ -569,7 +600,7 @@ def meals(json_output: bool = typer.Option(True, "--json/--no-json")) -> None:
 def observations(
     child_id: str | None = typer.Option(None, help="Child ID; defaults to context child."),
     activity_id: str | None = typer.Option(None, help="Additional activity ID filter."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch observations for additional activities for a child."""
     settings = Settings()
@@ -605,7 +636,7 @@ def notifications(
     type_filter: str | None = typer.Option(
         None, "--type", help="Notification type (e.g., NEW_GALLERY, UPCOMING_EVENT, NEW_EVENT)."
     ),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch notifications."""
     settings = Settings()
@@ -661,7 +692,7 @@ def notifications(
 def applications(
     phrase: str = typer.Option("", help="Search phrase."),
     status: str | None = typer.Option(None, help="Application status filter."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch applications (wnioski)."""
     settings = Settings()
@@ -675,31 +706,89 @@ def applications(
     if json_output:
         console.print_json(data=payload)
     else:
-        console.print(Pretty(payload))
+        edges = (payload.get("applications") or {}).get("edges") or []
+        if not edges:
+            console.print("No applications.")
+            return
+        table = Table(title="Applications", show_lines=True)
+        table.add_column("ID")
+        table.add_column("Created")
+        table.add_column("Form name")
+        table.add_column("Form status")
+        table.add_column("Status")
+        table.add_column("Director comment")
+        for item in edges:
+            node = item.get("node", {})
+            form = node.get("applicationForm") or {}
+            table.add_row(
+                str(node.get("id", "")),
+                str(node.get("created", "")),
+                str(form.get("name", "")),
+                str(form.get("status", "")),
+                str(node.get("status", "")),
+                str(node.get("commentDirector", "")),
+            )
+        console.print(table)
 
 
 @app.command()
-def me(json_output: bool = typer.Option(True, "--json/--no-json")) -> None:
+def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch current user profile and context."""
     settings = Settings()
     tokens = _load_tokens(settings)
 
     context = ContextStore(settings.context_file).load()
-    client = GraphQLClient(settings, tokens, context=context)
-    try:
-        data = asyncio.run(client.execute(queries.ME))
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
+    data = _execute_graphql(settings, tokens, queries.ME, {}, context, label="me")
     payload = {"me": data.get("me")}
     if json_output:
         console.print_json(data=payload)
-    else:
-        console.print(Pretty(payload))
+        return
+
+    me_data: dict[str, Any] = payload.get("me") or {}
+    summary = Table(title="Me", show_header=False)
+    summary.add_row("Full name", str(me_data.get("fullName", "")))
+    summary.add_row("Email", str(me_data.get("email", "")))
+    summary.add_row("Phone", str(me_data.get("phone", "")))
+    summary.add_row("Position", str(me_data.get("userPosition", "")))
+    summary.add_row("Type", str(me_data.get("userType", "")))
+    console.print(summary)
+
+    children = me_data.get("children") or []
+    if children:
+        ctable = Table(title="Children", show_lines=True)
+        ctable.add_column("ID")
+        ctable.add_column("Name")
+        ctable.add_column("Surname")
+        ctable.add_column("Group")
+        for child in children:
+            group_name = (child.get("group") or {}).get("name", "")
+            ctable.add_row(
+                str(child.get("id", "")),
+                str(child.get("name", "")),
+                str(child.get("surname", "")),
+                str(group_name),
+            )
+        console.print(ctable)
+
+    preschools = me_data.get("availablePreschools") or []
+    if preschools:
+        ptable = Table(title="Preschools", show_lines=True)
+        ptable.add_column("ID")
+        ptable.add_column("Name")
+        ptable.add_column("Phone")
+        ptable.add_column("Email")
+        for pre in preschools:
+            ptable.add_row(
+                str(pre.get("id", "")),
+                str(pre.get("name", "")),
+                str(pre.get("phone", "")),
+                str(pre.get("email", "")),
+            )
+        console.print(ptable)
 
 
 @app.command()
-def colors(json_output: bool = typer.Option(True, "--json/--no-json")) -> None:
+def colors(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch available preschools and color scheme."""
     settings = Settings()
     tokens = _load_tokens(settings)
@@ -718,7 +807,7 @@ def colors(json_output: bool = typer.Option(True, "--json/--no-json")) -> None:
 
 
 @app.command()
-def unread(json_output: bool = typer.Option(True, "--json/--no-json")) -> None:
+def unread(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch unread notification/message counts."""
     settings = Settings()
     tokens = _load_tokens(settings)
@@ -749,7 +838,7 @@ def calendar(  # noqa: PLR0913
     show_canceled: bool | None = typer.Option(None, help="Include canceled activities."),
     for_schedule: bool | None = typer.Option(None, help="For schedule flag."),
     activity_id: str | None = typer.Option(None, help="Specific activity ID."),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch calendar entries."""
     settings = Settings()
@@ -787,7 +876,31 @@ def calendar(  # noqa: PLR0913
     if json_output:
         console.print_json(data=payload)
     else:
-        console.print(Pretty(payload))
+        items = payload.get("calendar") or []
+        if not items:
+            console.print("No calendar entries.")
+            return
+        table = Table(
+            title=f"Calendar {variables['dateFrom']} to {variables['dateTo']}",
+            show_lines=True,
+        )
+        table.add_column("Title")
+        table.add_column("Start")
+        table.add_column("End")
+        table.add_column("Type")
+        table.add_column("All day")
+        table.add_column("Reported by")
+        for node in items:
+            reporter = (node.get("absenceReportedBy") or {}).get("fullName", "")
+            table.add_row(
+                str(node.get("title", "")),
+                str(node.get("startDate", "")),
+                str(node.get("endDate", "")),
+                str(node.get("type", "")),
+                "yes" if node.get("allDay") else "no",
+                str(reporter),
+            )
+        console.print(table)
 
 
 @app.command()
@@ -800,7 +913,7 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
     interactive: bool = typer.Option(
         True, "--interactive/--no-interactive", help="Interactive selection with prompts."
     ),
-    json_output: bool = typer.Option(True, "--json/--no-json"),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Set/show context (preschool, child, year) used to build cookies automatically."""
     settings = Settings()
@@ -869,7 +982,12 @@ def context(  # noqa: PLR0913, PLR0912, PLR0915
     if json_output:
         console.print_json(data=payload)
     else:
-        console.print(Pretty(payload))
+        ctx_table = Table(title="Context", show_header=False)
+        ctx_table.add_row("Child ID", str(ctx.child_id or "-"))
+        ctx_table.add_row("Preschool ID", str(ctx.preschool_id or "-"))
+        ctx_table.add_row("Year ID", str(ctx.year_id or "-"))
+        ctx_table.add_row("Locale", str(ctx.locale))
+        console.print(ctx_table)
 
 
 if __name__ == "__main__":

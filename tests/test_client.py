@@ -6,6 +6,7 @@ from httpx import Response
 
 from kidsview_cli.client import GraphQLClient
 from kidsview_cli.config import Settings
+from kidsview_cli.context import Context
 from kidsview_cli.session import AuthTokens
 
 
@@ -53,3 +54,32 @@ async def test_graphql_can_use_access_token() -> None:
     assert route.called
     req = route.calls.last.request
     assert req.headers["Authorization"] == "JWT ACCESSTOKEN"
+
+
+@pytest.mark.asyncio()
+async def test_graphql_builds_cookies_from_context_when_not_overridden() -> None:
+    settings = Settings(api_url="https://backend.kidsview.pl/graphql", cookies=None)
+    tokens = AuthTokens(id_token="IDTOKEN", access_token="ACCESSTOKEN", refresh_token=None)
+    client = GraphQLClient(
+        settings,
+        tokens,
+        context=Context(
+            child_id="childX",
+            preschool_id="preX",
+            year_id="yearX",
+            locale="pl",
+        ),
+    )
+
+    with respx.mock:
+        route = respx.post(settings.api_url).mock(
+            return_value=Response(200, json={"data": {"ok": True}})
+        )
+        _ = await client.execute("query { ok }")
+
+    assert route.called
+    cookie_header = route.calls.last.request.headers.get("cookie", "")
+    assert "active_child=childX" in cookie_header
+    assert "preschool=preX" in cookie_header
+    assert "active_year=yearX" in cookie_header
+    assert "locale=pl" in cookie_header

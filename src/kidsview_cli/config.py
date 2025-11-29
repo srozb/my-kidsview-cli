@@ -61,5 +61,9 @@ class Settings(BaseSettings):  # type: ignore[misc]
         default=Path.home() / ".config" / "kidsview-cli" / "context.json",
         description="Selected preschool/child/year context.",
     )
+    download_dir: Path = Field(
+        default=Path.home() / "Pictures" / "Kidsview",
+        description="Default directory for gallery downloads.",
+    )
 
     model_config = SettingsConfigDict(env_prefix="KIDSVIEW_", env_file=".env", extra="ignore")

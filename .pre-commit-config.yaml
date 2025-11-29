@@ -8,13 +8,15 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest
+        entry: uv
         language: system
+        args: ["run", "pytest"]
         pass_filenames: false
       - id: ruff-check
         name: ruff-check
-        entry: uv run ruff check
+        entry: uv
         language: system
+        args: ["run", "ruff", "check"]
         pass_filenames: false
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2

@@ -32,6 +32,7 @@ htmlcov/
 # uv / cache
 .uv/
 .cache/
+.uv-cache/
 
 # Local config
 .env
