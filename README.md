@@ -10,6 +10,7 @@ CLI do platformy Kidsview (obecności, oceny, posiłki, czesne, kalendarz, wiado
 5. Ustaw kontekst automatycznie (placówka/dziecko/rok → ciasteczka):
    `uv run kidsview-cli context --auto`
    Jeśli jest wiele opcji, CLI zapyta interaktywnie (Rich); pojedyncze wybiera automatycznie. Aby wymusić ponowny wybór mimo istniejącego kontekstu, użyj `--change`. Wybrane wartości zapisze do `~/.config/kidsview-cli/context.json` i będzie ich używać do budowy ciasteczek dla wszystkich zapytań.
+6. Autouzupełnianie: `uv run kidsview-cli --install-completion` (bash/zsh/fish) — ułatwia pracę z wieloma flagami.
 
 ## Konfiguracja uwierzytelniania
 - Region: `eu-west-1`
@@ -25,7 +26,7 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 - Ogłoszenia: `uv run kidsview-cli announcements --first 10`
 - Rachunki miesięczne: `uv run kidsview-cli monthly-bills --year WWVhck5vZGU6MjM4OA== --is-paid true`
 - Galerie: `uv run kidsview-cli galleries --first 3`
-- Pobierz galerie: `uv run kidsview-cli gallery-download --all --output-dir galleries` lub `--ids g1,g2`
+- Pobierz galerie: `uv run kidsview-cli gallery-download --all --output-dir galleries` lub `--id g1,g2`; bez parametrów wybierzesz interaktywnie.
 - Dziecko (skrót): `uv run kidsview-cli active-child` (id, grupa, saldo)
 - Dziecko (szczegóły + aktywności): `uv run kidsview-cli active-child --detailed --date-from 2025-11-23 --date-to 2025-11-28`
 - Użytkownicy czatu: `uv run kidsview-cli chat-users`
@@ -71,7 +72,7 @@ print(data)
 Możesz wykorzystać `GraphQLClient` i modele w innych projektach (np. publikacja wyników do MQTT dla Home Assistant).
 
 ## Instalacja globalna (uv tool)
-- Z tagu releasu: `uv tool install git+https://github.com/USER/kidsview-cli.git@v0.1.0`
+- Z tagu releasu: `uv tool install git+https://github.com/USER/kidsview-cli.git@v0.3.0`
 - Dostępne entrypointy: `kidsview-cli` i krótszy alias `kv-cli`.
 
 ## Testy i jakość
