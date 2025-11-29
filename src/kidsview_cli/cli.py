@@ -19,7 +19,7 @@ from .auth import AuthClient, AuthError
 from .client import ApiError, GraphQLClient
 from .config import Settings
 from .context import Context, ContextStore
-from .download import download_all, make_progress
+from .download import download_all, fetch_galleries, make_progress
 from .session import AuthTokens, SessionStore
 
 app = typer.Typer(help="Kidsview CLI for humans and automation.")
@@ -48,6 +48,36 @@ def _prompt_choice(options: list[dict[str, Any]], title: str, label_key: str) ->
         return str(options[choice - 1].get("id"))
     console.print("[red]Invalid choice.[/red]")
     raise typer.Exit(code=1)
+
+
+def _prompt_multi_choice(options: list[dict[str, Any]], title: str, label_key: str) -> list[str]:
+    """Prompt for one or more selections; returns list of IDs."""
+    if not options:
+        return []
+    table = Table(title=title)
+    table.add_column("#", justify="right")
+    table.add_column("Name")
+    table.add_column("ID")
+    for idx, item in enumerate(options, start=1):
+        table.add_row(str(idx), str(item.get(label_key, "")), str(item.get("id", "")))
+    console.print(table)
+    raw = typer.prompt(f"Choose numbers (comma-separated) 1-{len(options)}", type=str)
+    picks: list[str] = []
+    for raw_part in raw.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        try:
+            num = int(part)
+        except ValueError as err:
+            console.print(f"[red]Invalid choice: {part}[/red]")
+            raise typer.Exit(code=1) from err
+        if 1 <= num <= len(options):
+            picks.append(str(options[num - 1].get("id")))
+        else:
+            console.print(f"[red]Choice out of range: {num}[/red]")
+            raise typer.Exit(code=1)
+    return picks
 
 
 def _fetch_me(settings: Settings, tokens: Any, ctx: Context | None) -> dict[str, Any]:
@@ -632,7 +662,7 @@ def payment_orders(
 
 @app.command()
 def gallery_download(  # noqa: B008
-    ids: str = typer.Option("", "--ids", help="Comma-separated gallery IDs."),
+    ids: str = typer.Option("", "--id", "--ids", help="Comma-separated gallery IDs."),
     all_: bool = typer.Option(False, "--all", help="Download all galleries not yet downloaded."),
     output_dir: Path | None = typer.Option(
         None,
@@ -648,9 +678,23 @@ def gallery_download(  # noqa: B008
     dest.mkdir(parents=True, exist_ok=True)
 
     id_list = [i.strip() for i in ids.split(",") if i.strip()]
+    galleries_cache: list[dict[str, Any]] | None = None
     if not all_ and not id_list:
-        console.print("[red]Provide at least one --id or use --all.[/red]")
-        raise typer.Exit(code=1)
+        # Interactive pick
+        try:
+            galleries_cache = _run(
+                fetch_galleries(settings=settings, tokens=tokens, context=context)
+            )
+        except Exception as exc:  # pragma: no cover - network errors
+            console.print(f"[red]Failed to list galleries:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+        if not galleries_cache:
+            console.print("[red]No galleries available to choose.[/red]")
+            raise typer.Exit(code=1)
+        id_list = _prompt_multi_choice(galleries_cache, "Select galleries", "name")
+        if not id_list:
+            console.print("[red]No galleries selected.[/red]")
+            raise typer.Exit(code=1)
 
     try:
         with make_progress() as progress:
@@ -662,6 +706,7 @@ def gallery_download(  # noqa: B008
                     gallery_ids=id_list,
                     output_dir=dest,
                     skip_downloaded=all_,
+                    galleries=galleries_cache,
                     progress=progress,
                     concurrency=4,
                 )
@@ -720,27 +765,7 @@ def active_child(
         if not child:
             console.print("No active child.")
             return
-        table = Table(title="👧 Active child")
-        table.add_column("ID")
-        table.add_column("Name")
-        table.add_column("Surname")
-        table.add_column("Status")
-        table.add_column("Group")
-        table.add_column("Balance")
-        table.add_column("Preschool")
-        preschool = (child.get("preschool") or {}).get("name", "")
-        group = (child.get("group") or {}).get("name", "")
-        balance = child.get("balance", "")
-        table.add_row(
-            str(child.get("id", "")),
-            str(child.get("name", "")),
-            str(child.get("surname", "")),
-            str(child.get("status", "")),
-            str(group),
-            str(balance),
-            str(preschool),
-        )
-        console.print(table)
+        _print_active_child(child)
 
 
 @app.command()
@@ -1258,7 +1283,7 @@ def applications(
 
 
 @app.command()
-def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
+def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:  # noqa: PLR0915
     """Fetch current user profile and context."""
     settings = Settings()
     tokens = _load_tokens(settings)
@@ -1322,6 +1347,75 @@ def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
                 str(pre.get("phone", "")),
                 str(pre.get("email", "")),
                 str(pre.get("address", "")),
+            )
+        console.print(ptable)
+
+    # Optional: show available years for current preschool context
+    if context and context.preschool_id:
+        try:
+            years_data = _fetch_years(settings, tokens, context)
+            years_list = years_data.get("years") if isinstance(years_data, dict) else None
+        except ApiError:
+            years_list = None
+        if years_list:
+            ytable = Table(title="📆 Years")
+            ytable.add_column("ID")
+            ytable.add_column("Display")
+            ytable.add_column("Start")
+            ytable.add_column("End")
+            for y in years_list:
+                ytable.add_row(
+                    str(y.get("id", "")),
+                    str(y.get("displayName", "")),
+                    str(y.get("startDate", "")),
+                    str(y.get("endDate", "")),
+                )
+            console.print(ytable)
+
+
+def _print_active_child(child: dict[str, Any]) -> None:
+    summary = Table(title="👧 Active child", show_header=False)
+    preschool = (child.get("preschool") or {}).get("name", "")
+    group = (child.get("group") or {}).get("name", "")
+    summary.add_row("ID", str(child.get("id", "")))
+    summary.add_row("Full name", f"{child.get('name','')} {child.get('surname','')}".strip())
+    summary.add_row("Status", str(child.get("status", "")))
+    summary.add_row("Preschool", str(preschool))
+    summary.add_row("Group", str(group))
+    summary.add_row("Balance", str(child.get("balance", "")))
+    summary.add_row("Technical account", str(child.get("technicalAccount", "")))
+    summary.add_row("Individual number", str(child.get("individualNumber", "")))
+    summary.add_row(
+        "Contract",
+        f"{child.get('contractStartDate','')} → {child.get('contractEndDate','')}".strip(),
+    )
+    summary.add_row("Diet", str((child.get("dietCategory") or {}).get("name", "")))
+    exclusions = ", ".join(e.get("name", "") for e in (child.get("exclusions") or []))
+    summary.add_row("Exclusions", exclusions or "-")
+    summary.add_row("PIN", str(child.get("pinCode", "")))
+    console.print(summary)
+
+    parents = (child.get("parents") or {}).get("edges") or []
+    if parents:
+        ptable = Table(title="👨‍👩‍👧 Parents/guardians")
+        ptable.add_column("Name")
+        ptable.add_column("Phone")
+        ptable.add_column("Email")
+        ptable.add_column("Can pick up")
+        ptable.add_column("Legal guardian")
+        ptable.add_column("App access")
+        ptable.add_column("Limited")
+        for edge in parents:
+            node = edge.get("node") or {}
+            full = f"{node.get('firstName','')} {node.get('lastName','')}".strip()
+            ptable.add_row(
+                full,
+                str(node.get("phone", "")),
+                str(node.get("email", "")),
+                "yes" if node.get("canPickupChild") else "no",
+                "yes" if node.get("isLegalGuardian") else "no",
+                "yes" if node.get("hasAppAccess") else "no",
+                "yes" if node.get("limitedAccess") else "no",
             )
         console.print(ptable)
 
