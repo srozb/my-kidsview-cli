@@ -548,6 +548,65 @@ query usersForChat($userTypes: [String]) {
 }
 """
 
+CHAT_THREADS = """
+query threads(
+  $first: Int
+  $after: String
+  $type: String
+  $child: ID
+  $preschool: ID
+  $search: String
+) {
+  threads(
+    first: $first
+    after: $after
+    type: $type
+    child: $child
+    preschool: $preschool
+    search: $search
+  ) {
+    pageInfo { endCursor hasNextPage }
+    edges {
+      node {
+        id
+        name
+        type
+        modified
+        lastMessage
+        isRead
+        recipients { id fullName }
+        child { id name surname }
+      }
+    }
+  }
+}
+"""
+
+CHAT_MESSAGES = """
+query thread($id: ID!, $first: Int, $after: String) {
+  thread(id: $id) {
+    id
+    name
+    type
+    modified
+    lastMessage
+    recipients { id fullName }
+    messages(first: $first, after: $after) {
+      pageInfo { endCursor hasNextPage }
+      edges {
+        node {
+          id
+          text
+          created
+          read
+          sender { id fullName }
+        }
+      }
+    }
+  }
+}
+"""
+
 CURRENT_DIET = """
 query currentDietForChild {
   currentDietForChild {

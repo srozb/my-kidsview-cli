@@ -386,7 +386,7 @@ def test_absence_uses_context_child(tmp_path: Path, monkeypatch) -> None:
 
     respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
 
-    result = runner.invoke(app, ["absence", "--date", "2025-12-01"])
+    result = runner.invoke(app, ["absence", "--date", "2025-12-01", "--yes"])
     assert result.exit_code == 0
     assert captured is not None
     assert captured["variables"]["childId"] == "CHILD1"
@@ -429,6 +429,75 @@ def test_gallery_comment(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(app, ["gallery-comment", "--id", "G1", "--content", "Nice"])
     assert result.exit_code == 0
     assert reqs[0]["variables"] == {"galleryId": "G1", "content": "Nice"}
+
+
+@respx.mock
+def test_chat_threads_and_messages(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+
+    def handler(request):
+        payload = json.loads(request.content)
+        if "threads" in payload.get("query", ""):
+            return Response(
+                200,
+                json={
+                    "data": {
+                        "threads": {
+                            "edges": [
+                                {
+                                    "node": {
+                                        "id": "T1",
+                                        "name": "Thread1",
+                                        "type": "chat",
+                                        "modified": "2025-12-01",
+                                        "lastMessage": "Hello world",
+                                        "isRead": False,
+                                        "recipients": [{"id": "U1", "fullName": "John"}],
+                                        "child": {"id": "C1", "name": "H", "surname": "R"},
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                },
+            )
+        if "thread" in payload.get("query", "") and "messages" in payload.get("query", ""):
+            return Response(
+                200,
+                json={
+                    "data": {
+                        "thread": {
+                            "id": "T1",
+                            "name": "Thread1",
+                            "messages": {
+                                "edges": [
+                                    {
+                                        "node": {
+                                            "id": "M1",
+                                            "text": "hello",
+                                            "created": "2025-12-01",
+                                            "read": True,
+                                            "sender": {"fullName": "John"},
+                                        }
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                },
+            )
+        return Response(400)
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(side_effect=handler)
+
+    result = runner.invoke(app, ["chat-threads"])
+    assert result.exit_code == 0
+    assert "Thread1" in result.stdout
+
+    result2 = runner.invoke(app, ["chat-messages", "--thread-id", "T1"])
+    assert result2.exit_code == 0
+    assert "hello" in result2.stdout
 
 
 @respx.mock

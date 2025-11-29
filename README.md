@@ -32,6 +32,7 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 | `active-child` / `active-child --detailed ...` | Skrót lub szczegóły dziecka. |
 | `me` | Profil użytkownika, dzieci, placówki, lata. |
 | `chat-users` / `chat-search` / `chat-send` | Użytkownicy czatu, wyszukiwanie, wysyłanie wiadomości. |
+| `chat-threads` / `chat-messages` | Lista wątków i wiadomości w wątku. |
 | `notifications` | Powiadomienia (filtry, mark-read, only-unread). |
 | `applications` / `application-submit` | Lista wniosków, składanie wniosku. |
 | `absence --date today` | Zgłoszenie nieobecności (domyślnie dziecko z kontekstu). |

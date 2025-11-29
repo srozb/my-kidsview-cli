@@ -80,6 +80,69 @@ def _prompt_multi_choice(options: list[dict[str, Any]], title: str, label_key: s
     return picks
 
 
+LAST_MSG_PREVIEW = 50
+TEXT_PREVIEW = 80
+
+
+def _render_thread_row(node: dict[str, Any]) -> tuple[str, str, str, str, str, str, str]:
+    recipients = ", ".join(r.get("fullName", "") for r in (node.get("recipients") or []))
+    child = node.get("child") or {}
+    child_name = f"{child.get('name','')} {child.get('surname','')}".strip()
+    last_msg = str(node.get("lastMessage", "")[:LAST_MSG_PREVIEW])
+    name = node.get("name") or last_msg or recipients or child_name or "(no name)"
+    return (
+        str(node.get("id", "")),
+        str(name),
+        child_name,
+        recipients,
+        last_msg + ("..." if len(str(node.get("lastMessage", ""))) > LAST_MSG_PREVIEW else ""),
+        str(node.get("type", "")),
+        str(node.get("modified", "")),
+    )
+
+
+def _render_threads_table(edges: list[dict[str, Any]], title: str = "💬 Chat threads") -> Table:
+    table = Table(title=title)
+    table.add_column("ID")
+    table.add_column("Name")
+    table.add_column("Child")
+    table.add_column("Recipients")
+    table.add_column("Last message")
+    table.add_column("Type")
+    table.add_column("Modified")
+    for item in edges:
+        node = item.get("node", {})
+        row = _render_thread_row(node)
+        table.add_row(*row)
+    return table
+
+
+def _prompt_thread_selection(edges: list[dict[str, Any]]) -> str:
+    """Prompt user to pick a thread from edges; returns thread ID or exits."""
+    if not edges:
+        console.print("No threads.")
+        raise typer.Exit(code=1)
+    table = Table(title="Threads")
+    table.add_column("#", justify="right")
+    table.add_column("Name")
+    table.add_column("Child")
+    table.add_column("Recipients")
+    table.add_column("Last message")
+    table.add_column("Type")
+    table.add_column("Modified")
+    for idx, item in enumerate(edges, start=1):
+        node = item.get("node", {}) or {}
+        row = _render_thread_row(node)
+        table.add_row(str(idx), *row[1:])  # skip ID in display
+        item["_resolved_id"] = row[0]
+    console.print(table)
+    choice = typer.prompt(f"Choose a number 1-{len(edges)}", type=int)
+    if 1 <= choice <= len(edges):
+        return str(edges[choice - 1].get("_resolved_id", ""))
+    console.print("[red]Invalid choice.[/red]")
+    raise typer.Exit(code=1)
+
+
 def _fetch_me(settings: Settings, tokens: Any, ctx: Context | None) -> dict[str, Any]:
     return _execute_graphql(settings, tokens, queries.ME, {}, ctx, label="me")
 
@@ -832,6 +895,115 @@ def chat_search(
         console.print(Pretty(payload))
 
 
+@app.command("chat-threads")
+def chat_threads(  # noqa: PLR0913
+    type_filter: str | None = typer.Option(None, "--type", help="Thread type filter."),
+    child_id: str | None = typer.Option(None, "--child-id", help="Child ID filter."),
+    preschool_id: str | None = typer.Option(None, "--preschool-id", help="Preschool ID filter."),
+    search: str = typer.Option("", help="Search by name."),
+    first: int = typer.Option(20, help="Number of threads."),
+    after: str | None = typer.Option(None, help="Cursor for pagination."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """List chat threads."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    variables: dict[str, object] = {
+        "first": first,
+        "after": after,
+        "type": type_filter,
+        "child": child_id,
+        "preschool": preschool_id,
+        "search": search or None,
+    }
+    data = _execute_graphql(
+        settings, tokens, queries.CHAT_THREADS, variables, context, label="threads"
+    )
+    payload = {"threads": data.get("threads")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    edges = (payload.get("threads") or {}).get("edges") or []
+    if not edges:
+        console.print("No threads.")
+        return
+    console.print(_render_threads_table(edges))
+
+
+@app.command("chat-messages")
+def chat_messages(
+    thread_id: str | None = typer.Option(None, "--thread-id", help="Thread ID (optional)."),
+    first: int = typer.Option(20, help="Number of messages."),
+    after: str | None = typer.Option(None, help="Cursor for pagination."),
+    json_output: bool = typer.Option(False, "--json/--no-json"),
+) -> None:
+    """List messages in a thread."""
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    context = ContextStore(settings.context_file).load()
+    chosen_thread = thread_id
+    threads_cache: list[dict[str, Any]] | None = None
+
+    if not chosen_thread:
+        data_threads = _execute_graphql(
+            settings,
+            tokens,
+            queries.CHAT_THREADS,
+            {"first": 20},
+            context,
+            label="threads",
+        )
+        threads_cache = (data_threads.get("threads") or {}).get("edges") or []
+        chosen_thread = _prompt_thread_selection(threads_cache)
+        if not chosen_thread:
+            console.print("[red]No thread selected.[/red]")
+            raise typer.Exit(code=1)
+
+    variables: dict[str, object] = {"id": chosen_thread, "first": first, "after": after}
+    data = _execute_graphql(
+        settings, tokens, queries.CHAT_MESSAGES, variables, context, label="thread"
+    )
+    payload = {"thread": data.get("thread")}
+    if json_output:
+        console.print_json(data=payload)
+        return
+    thread = payload.get("thread") or {}
+    messages = (thread.get("messages") or {}).get("edges") or []
+    if not messages:
+        console.print("No messages.")
+        return
+    title = f"💬 Messages in {thread.get('name','')}"
+    table = Table(title=title)
+    table.add_column("ID")
+    table.add_column("Created")
+    table.add_column("Sender")
+    table.add_column("Read")
+    table.add_column("Type")
+    table.add_column("Modified")
+    table.add_column("Recipients")
+    table.add_column("Last message")
+    table.add_column("Text")
+    for item in messages:
+        node = item.get("node", {})
+        sender = (node.get("sender") or {}).get("fullName", "")
+        text = str(node.get("text", ""))
+        preview = text if len(text) <= TEXT_PREVIEW else text[: (TEXT_PREVIEW - 3)] + "..."
+        table.add_row(
+            str(node.get("id", "")),
+            str(node.get("created", "")),
+            str(sender),
+            "yes" if node.get("read") else "no",
+            str(thread.get("type", "")),
+            str(thread.get("modified", "")),
+            ", ".join(r.get("fullName", "") for r in (thread.get("recipients") or [])),
+            str(thread.get("lastMessage", "")[:LAST_MSG_PREVIEW])
+            + ("..." if len(str(thread.get("lastMessage", ""))) > LAST_MSG_PREVIEW else ""),
+            preview,
+        )
+    console.print(table)
+
+
 @app.command()
 def chat_send(
     recipients: str = typer.Option(
@@ -1145,6 +1317,9 @@ def absence(  # noqa: PLR0913
         "--force-partial-meal-refund/--no-force-partial-meal-refund",
         help="Force partial meal refund.",
     ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Do not prompt for confirmation (use with care)."
+    ),
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Report child absence (setChildAbsence)."""
@@ -1155,10 +1330,19 @@ def absence(  # noqa: PLR0913
     if not effective_child:
         console.print("[red]Child ID required (pass --child-id or set context).[/red]")
         raise typer.Exit(code=1)
+    date_from_norm = _normalize_date(date_val)
+    date_to_norm = _normalize_date(date_to) if date_to else None
+    if not yes:
+        range_text = f"{date_from_norm}" + (f" to {date_to_norm}" if date_to_norm else "")
+        prompt_msg = (
+            f"Report absence for child {effective_child} on {range_text}? "
+            f"(on_time={on_time}, partial_refund={partial_meal_refund})"
+        )
+        typer.confirm(prompt_msg, abort=True)
     variables: dict[str, object] = {
         "childId": effective_child,
-        "date": _normalize_date(date_val),
-        "dateTo": _normalize_date(date_to) if date_to else None,
+        "date": date_from_norm,
+        "dateTo": date_to_norm,
         "onTime": on_time,
         "partialMealRefund": partial_meal_refund,
         "forcePartialMealRefund": force_partial_refund,
@@ -1169,7 +1353,10 @@ def absence(  # noqa: PLR0913
     if json_output:
         console.print_json(data=data)
     else:
-        console.print("[green]Absence reported.[/green]")
+        range_text = f"{date_from_norm}" + (f" to {date_to_norm}" if date_to_norm else "")
+        console.print(
+            f"[green]Absence reported[/green] for child {effective_child} on {range_text}."
+        )
 
 
 @app.command("notification-prefs")
@@ -1455,7 +1642,13 @@ def unread(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     if json_output:
         console.print_json(data=payload)
     else:
-        console.print(Pretty(payload))
+        counts = payload.get("unreadCounts") or {}
+        table = Table(title="🔔 Unread")
+        table.add_column("Type")
+        table.add_column("Count")
+        table.add_row("Notifications", str(counts.get("unreadNotificationsCount", 0)))
+        table.add_row("Messages", str(counts.get("unreadMessagesCount", 0)))
+        console.print(table)
 
 
 @app.command()
