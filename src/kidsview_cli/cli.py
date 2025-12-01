@@ -238,6 +238,13 @@ def _execute_graphql(  # noqa: PLR0913
     raise typer.Exit(code=1) from last_error
 
 
+def _env() -> tuple[Settings, AuthTokens, Context | None]:
+    settings = Settings()
+    tokens = _load_tokens(settings)
+    ctx = ContextStore(settings.context_file).load()
+    return settings, tokens, ctx
+
+
 @app.command()
 def login(
     username: str = typer.Option(..., prompt=True, help="Kidsview username (email)."),
@@ -251,8 +258,8 @@ def login(
 ) -> None:
     """Authenticate with Kidsview and cache tokens."""
     settings = Settings()
-    client = AuthClient(settings)
     store = SessionStore(settings.session_file)
+    client = AuthClient(settings)
 
     try:
         tokens = _run(client.login(username, password))
@@ -411,10 +418,7 @@ if __name__ == "__main__":
 @app.command()
 def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:  # noqa: PLR0912, PLR0915
     """Fetch current user profile and context."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     data = _execute_graphql(settings, tokens, queries.ME, {}, context, label="me")
     payload = {"me": data.get("me")}
     if json_output:
@@ -575,13 +579,11 @@ def active_child(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch active child summary or detailed info (requires date range)."""
-    settings = Settings()
-    tokens = SessionStore(settings.session_file).load()
+    settings, tokens, context = _env()
     if not tokens:
         console.print("[red]No session found. Run `kidsview-cli login` first.[/red]")
         raise typer.Exit(code=1)
 
-    context = ContextStore(settings.context_file).load()
     client = GraphQLClient(settings, tokens, context=context)
     if detailed:
         if not date_from or not date_to:
@@ -618,9 +620,7 @@ def graphql(
     json_output: bool = typer.Option(False, "--json/--no-json", help="Print response as JSON."),
 ) -> None:
     """Execute a GraphQL query against Kidsview backend using cached tokens."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    ctx = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
 
     # Support @file syntax for queries.
     if query.startswith("@"):
@@ -640,7 +640,7 @@ def graphql(
             console.print(f"[red]Invalid JSON for variables:[/red] {exc}")
             raise typer.Exit(code=1) from exc
 
-    result = _execute_graphql(settings, tokens, query_text, variables_payload, ctx)
+    result = _execute_graphql(settings, tokens, query_text, variables_payload, context)
 
     if json_output:
         console.print_json(data=result)
@@ -670,9 +670,7 @@ def notifications(  # noqa: PLR0913, PLR0915
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch notifications."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     collected_edges: list[dict[str, Any]] = []
     cursor = after
 
@@ -771,10 +769,8 @@ def announcements(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch announcements."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
+    settings, tokens, context = _env()
     variables = {"first": first, "after": after, "status": status, "phrase": phrase}
-    context = ContextStore(settings.context_file).load()
     data = _execute_graphql(
         settings, tokens, queries.ANNOUNCEMENTS, variables, context, label="announcements"
     )
@@ -817,9 +813,7 @@ def quick_calendar(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch quick calendar overview (has events/new/holiday/absent)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
 
     def _compute_range() -> tuple[str, str]:
         if days:
@@ -897,8 +891,7 @@ def calendar(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch calendar entries."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
+    settings, tokens, context = _env()
 
     groups_list = [g for g in groups_ids.split(",") if g] if groups_ids else []
     activity_type_list = (
@@ -936,7 +929,6 @@ def calendar(  # noqa: PLR0913
         "forSchedule": for_schedule,
         "activityId": activity_id,
     }
-    context = ContextStore(settings.context_file).load()
     data = _execute_graphql(
         settings, tokens, queries.CALENDAR, variables, context, label="calendar"
     )
@@ -977,9 +969,7 @@ def schedule(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch schedule for a group."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {"group": group_id}
     data = _execute_graphql(
         settings, tokens, queries.SCHEDULE, variables, context, label="schedule"
@@ -1035,9 +1025,7 @@ def absence(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Report child absence (setChildAbsence)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     effective_child = child_id or (context.child_id if context else None)
     if not effective_child:
         console.print("[red]Child ID required (pass --child-id or set context).[/red]")
@@ -1074,9 +1062,7 @@ def absence(  # noqa: PLR0913
 @app.command()
 def meals(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch current diet info for active child."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     data = _execute_graphql(settings, tokens, queries.CURRENT_DIET, {}, context, label="meals")
     payload = {"currentDietForChild": data.get("currentDietForChild")}
     if json_output:
@@ -1092,9 +1078,7 @@ def observations(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch observations for additional activities for a child."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     effective_child = child_id or (context.child_id if context else None)
     if not effective_child:
         console.print("[red]Child ID is required (set via --child-id or context).[/red]")
@@ -1124,9 +1108,7 @@ def applications(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch applications (wnioski)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {"phrase": phrase or None, "status": status}
     data = _execute_graphql(
         settings, tokens, queries.APPLICATIONS, variables, context, label="applications"
@@ -1169,9 +1151,7 @@ def application_submit(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Submit an application (createApplication)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "applicationFormId": form_id,
         "commentParent": comment or None,
@@ -1199,9 +1179,7 @@ def application_submit(
 @app.command()
 def unread(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch unread notification/message counts."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     client = GraphQLClient(settings, tokens, context=context)
     try:
         data = asyncio.run(client.execute(queries.UNREAD_COUNTS))
@@ -1224,9 +1202,7 @@ def unread(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
 @app.command()
 def colors(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch available preschools and color scheme."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     client = GraphQLClient(settings, tokens, context=context)
     try:
         data = asyncio.run(client.execute(queries.COLORS))
@@ -1252,9 +1228,7 @@ def payments(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payments history."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "dateFrom": date_from,
         "dateTo": date_to,
@@ -1307,9 +1281,7 @@ def payments_summary(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payments summary (balances per child)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "search": search or None,
         "groupsIds": [g for g in groups_ids.split(",") if g] or None,
@@ -1363,9 +1335,7 @@ def payment_orders(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payment orders."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "first": first,
         "after": after,
@@ -1427,9 +1397,7 @@ def payment_components(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List payment components."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
     try:
         data = _execute_graphql(
@@ -1475,9 +1443,7 @@ def billing_periods(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List billing periods."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
     try:
         data = _execute_graphql(
@@ -1516,9 +1482,7 @@ def employee_billing_periods(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List billing periods for employees (if permitted)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
     try:
         data = _execute_graphql(
@@ -1560,9 +1524,7 @@ def employee_billing_periods(
 @app.command("tuition-discounts")
 def tuition_discounts(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """List tuition discounts (if available)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     try:
         data = _execute_graphql(
             settings, tokens, queries.TUITION_DISCOUNTS, {}, context, label="tuitionDiscounts"
@@ -1597,9 +1559,7 @@ def tuition_discounts(json_output: bool = typer.Option(False, "--json/--no-json"
 @app.command("employee-roles")
 def employee_roles(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """List employee roles (if permitted)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     try:
         data = _execute_graphql(
             settings, tokens, queries.EMPLOYEE_ROLES, {}, context, label="employeeRoles"
@@ -1636,9 +1596,7 @@ def employees(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List employees (basic fields)."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
     try:
         data = _execute_graphql(
@@ -1683,8 +1641,7 @@ def monthly_bills(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch monthly bills."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
+    settings, tokens, context = _env()
     variables = {
         "year": year,
         "child": child,
@@ -1692,7 +1649,6 @@ def monthly_bills(  # noqa: PLR0913
         "first": first,
         "after": after,
     }
-    context = ContextStore(settings.context_file).load()
     data = _execute_graphql(
         settings, tokens, queries.MONTHLY_BILLS, variables, context, label="monthly_bills"
     )
@@ -1736,8 +1692,7 @@ def galleries(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch galleries."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
+    settings, tokens, context = _env()
 
     variables: dict[str, object] = {
         "groupId": group_id,
@@ -1746,7 +1701,6 @@ def galleries(  # noqa: PLR0913
         "search": search,
         "order": order,
     }
-    context = ContextStore(settings.context_file).load()
     data = _execute_graphql(
         settings, tokens, queries.GALLERIES, variables, context, label="galleries"
     )
@@ -1781,9 +1735,7 @@ def gallery_download(  # noqa: B008
     ),
 ) -> None:
     """Download gallery images."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
 
     # Resolve child name for subdirectory (if context has child_id)
     child_name: str | None = None
@@ -1858,9 +1810,7 @@ def gallery_like(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Toggle like for a gallery."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     data = _execute_graphql(
         settings,
         tokens,
@@ -1883,9 +1833,7 @@ def gallery_comment(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Add comment to a gallery."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     data = _execute_graphql(
         settings,
         tokens,
@@ -1915,9 +1863,7 @@ def chat_threads(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List chat threads."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "first": first,
         "after": after,
@@ -1948,9 +1894,7 @@ def chat_messages(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List messages in a thread."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
     chosen_thread = thread_id
     threads_cache: list[dict[str, Any]] | None = None
 
@@ -2021,11 +1965,9 @@ def chat_users(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch users available for chat."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
+    settings, tokens, context = _env()
     types_list = [u for u in user_types.split(",") if u] if user_types else []
     variables = {"userTypes": types_list}
-    context = ContextStore(settings.context_file).load()
     data = _execute_graphql(
         settings, tokens, queries.USERS_FOR_CHAT, variables, context, label="chat_users"
     )
@@ -2058,14 +2000,12 @@ def chat_search(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Search chat groups and parents (groupsForChat)."""
-    settings = Settings()
-    tokens = SessionStore(settings.session_file).load()
+    settings, tokens, context = _env()
     if not tokens:
         console.print("[red]No session found. Run `kidsview-cli login` first.[/red]")
         raise typer.Exit(code=1)
 
     variables = {"search": search or None}
-    context = ContextStore(settings.context_file).load()
     client = GraphQLClient(settings, tokens, context=context)
     try:
         data = asyncio.run(client.execute(queries.GROUPS_FOR_CHAT, variables))
@@ -2092,8 +2032,7 @@ def chat_send(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Send a chat message (creates a thread)."""
-    settings = Settings()
-    tokens = SessionStore(settings.session_file).load()
+    settings, tokens, context = _env()
     if not tokens:
         console.print("[red]No session found. Run `kidsview-cli login` first.[/red]")
         raise typer.Exit(code=1)
@@ -2107,7 +2046,6 @@ def chat_send(
             "parentsMutualVisibility": parents_mutual_visibility,
         }
     }
-    context = ContextStore(settings.context_file).load()
     client = GraphQLClient(settings, tokens, context=context)
     try:
         data = asyncio.run(client.execute(queries.CREATE_THREAD, variables))
@@ -2136,9 +2074,7 @@ def notification_prefs(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Show or update notification preferences."""
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    context = ContextStore(settings.context_file).load()
+    settings, tokens, context = _env()
 
     def _list_prefs() -> list[dict[str, Any]]:
         data = _execute_graphql(
