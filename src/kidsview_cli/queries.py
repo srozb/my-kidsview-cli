@@ -10,6 +10,97 @@ query userNotificationPreferences {
 }
 """
 
+PAYMENT_COMPONENTS = """
+query paymentComponents($first: Int = 20, $after: String) {
+  paymentComponents(first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        name
+        typeName
+        fee
+        billingRepeatTypeName
+        feePeriodTypeName
+      }
+    }
+  }
+}
+"""
+
+BILLING_PERIODS = """
+query billingPeriods($first: Int = 20, $after: String) {
+  billingPeriods(first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        isClosed
+        month { id startDate endDate }
+      }
+    }
+  }
+}
+"""
+
+EMPLOYEE_BILLING_PERIODS = """
+query employeeBillingPeriods($first: Int = 20, $after: String) {
+  employeeBillingPeriods(first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        isClosed
+        month { id startDate endDate }
+        monthlyBillsTotalAmount
+        monthlyBillsTotalPaid
+      }
+    }
+  }
+}
+"""
+
+TUITION_DISCOUNTS = """
+query tuitionDiscounts {
+  tuitionDiscounts {
+    id
+    name
+    value
+    valueType
+    active
+  }
+}
+"""
+
+EMPLOYEE_ROLES = """
+query employeeRoles {
+  employeeRoles {
+    id
+    name
+    permissions
+  }
+}
+"""
+
+EMPLOYEES = """
+query employees($first: Int = 20, $after: String) {
+  employees(first: $first, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        id
+        firstName
+        lastName
+        email
+        phone
+        role { id name }
+        position
+      }
+    }
+  }
+}
+"""
+
 SET_USER_NOTIFICATION_PREFERENCES = """
 mutation setUserNotificationPreferences($preferences: [NotificationPreferenceInput!]!) {
   setUserNotificationPreferences(preferences: $preferences) {

@@ -28,8 +28,11 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 | `announcements --first 10` | Ogłoszenia. |
 | `monthly-bills --year ... --is-paid true` | Rachunki miesięczne. |
 | `payments` / `payments-summary` / `payment-orders` | Historia płatności, podsumowanie, zlecenia płatności. |
+| `payment-components` / `billing-periods` / `employee-billing-periods` | Składniki opłat, okresy rozliczeniowe (również dla pracowników). |
+| `tuition-discounts` | Lista zniżek czesnego (jeśli dostępne). |
+| `employee-roles` / `employees` | Role i lista pracowników (wymaga uprawnień). |
 | `galleries --first 3` | Lista galerii. |
-| `gallery-download --all` / `--id g1,g2` | Pobieranie galerii (bez parametrów wybierzesz interaktywnie). |
+| `gallery-download --all` / `--id g1,g2` | Pobieranie galerii (bez parametrów wybierzesz interaktywnie; foldery budowane z nazwą dziecka i galerii). |
 | `gallery-like` / `gallery-comment` | Polubienie/komentarz galerii. |
 | `active-child` / `active-child --detailed ...` | Skrót lub szczegóły dziecka. |
 | `me` | Profil użytkownika, dzieci, placówki, lata. |

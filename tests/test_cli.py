@@ -652,6 +652,181 @@ def test_calendar_pretty(tmp_path: Path, monkeypatch) -> None:
 
 
 @respx.mock
+def test_payment_components_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "paymentComponents": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "PC1",
+                                    "name": "Czesne",
+                                    "typeName": "TUITION",
+                                    "fee": "100.00",
+                                    "billingRepeatTypeName": "Monthly",
+                                    "feePeriodTypeName": "Month",
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["payment-components"])
+    assert result.exit_code == 0
+    assert "PC1" in result.stdout
+    assert "Czesne" in result.stdout
+
+
+@respx.mock
+def test_billing_periods_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "billingPeriods": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "BP1",
+                                    "isClosed": False,
+                                    "month": {"startDate": "2025-09-01", "endDate": "2025-09-30"},
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["billing-periods"])
+    assert result.exit_code == 0
+    assert "BP1" in result.stdout
+    assert "2025-09-01" in result.stdout
+
+
+@respx.mock
+def test_employee_billing_periods_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "employeeBillingPeriods": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "EBP1",
+                                    "isClosed": True,
+                                    "month": {"startDate": "2025-10-01", "endDate": "2025-10-31"},
+                                    "monthlyBillsTotalAmount": "200.00",
+                                    "monthlyBillsTotalPaid": "150.00",
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["employee-billing-periods"])
+    assert result.exit_code == 0
+    assert "EBP1" in result.stdout
+    assert "200.00" in result.stdout
+
+
+@respx.mock
+def test_tuition_discounts_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "tuitionDiscounts": [
+                        {
+                            "id": "TD1",
+                            "name": "Sibling",
+                            "value": "10",
+                            "valueType": "PERCENT",
+                            "active": True,
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["tuition-discounts"])
+    assert result.exit_code == 0
+    assert "TD1" in result.stdout
+    assert "Sibling" in result.stdout
+
+
+@respx.mock
+def test_employee_roles_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {"employeeRoles": [{"id": "ER1", "name": "Teacher", "permissions": ["P1"]}]}
+            },
+        )
+    )
+    result = runner.invoke(app, ["employee-roles"])
+    assert result.exit_code == 0
+    assert "ER1" in result.stdout
+    assert "Teacher" in result.stdout
+
+
+@respx.mock
+def test_employees_table(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "employees": {
+                        "edges": [
+                            {
+                                "node": {
+                                    "id": "E1",
+                                    "firstName": "Jan",
+                                    "lastName": "Nowak",
+                                    "email": "j@n.pl",
+                                    "phone": "123",
+                                    "role": {"name": "Teacher"},
+                                    "position": "Math",
+                                }
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    result = runner.invoke(app, ["employees"])
+    assert result.exit_code == 0
+    assert "Jan Nowak" in result.stdout
+    assert "Teacher" in result.stdout
+
+
+@respx.mock
 def test_me_pretty(tmp_path: Path, monkeypatch) -> None:
     session_path = _make_session(tmp_path)
     monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))

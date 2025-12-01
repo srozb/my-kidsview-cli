@@ -48,6 +48,7 @@ async def download_gallery(
     gallery: dict[str, Any],
     output_dir: Path,
     *,
+    child_name: str | None = None,
     progress: Progress | None = None,
     concurrency: int = 4,
 ) -> Path:
@@ -61,7 +62,8 @@ async def download_gallery(
         if url:
             image_urls.append(str(url))
 
-    target = target_dir(output_dir, name, gid)
+    base_dir = output_dir / sanitize_name(child_name) if child_name else output_dir
+    target = target_dir(base_dir, name, gid)
     target.mkdir(parents=True, exist_ok=True)
 
     task_id: TaskID | None = None
@@ -103,6 +105,7 @@ async def download_all(  # noqa: PLR0913
     galleries: list[dict[str, Any]] | None = None,
     progress: Progress | None = None,
     concurrency: int = 4,
+    child_name: str | None = None,
 ) -> list[Path]:
     all_galleries = galleries or await fetch_galleries(settings, tokens, context)
     if gallery_ids:
@@ -113,10 +116,17 @@ async def download_all(  # noqa: PLR0913
     for gal in all_galleries:
         gid = str(gal.get("id"))
         name = str(gal.get("name", gid))
-        dest_dir = target_dir(output_dir, name, gid)
+        base_dir = output_dir / sanitize_name(child_name) if child_name else output_dir
+        dest_dir = target_dir(base_dir, name, gid)
         if skip_downloaded and dest_dir.exists():
             continue
-        dest = await download_gallery(gal, output_dir, progress=progress, concurrency=concurrency)
+        dest = await download_gallery(
+            gal,
+            output_dir,
+            child_name=child_name,
+            progress=progress,
+            concurrency=concurrency,
+        )
         downloaded.append(dest)
     return downloaded
 
