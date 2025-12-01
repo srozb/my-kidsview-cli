@@ -148,8 +148,16 @@ TEXT_PREVIEW = 80
 MONTH_LAST = 12
 
 
-def _print_table(title: str, rows: Sequence[Sequence[str]], headers: Sequence[str]) -> None:
-    table = Table(title=title)
+def _truncate(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _print_table(
+    title: str, rows: Sequence[Sequence[str]], headers: Sequence[str], *, show_lines: bool = False
+) -> None:
+    table = Table(title=title, show_lines=show_lines)
     for h in headers:
         table.add_column(h)
     for row in rows:
@@ -702,12 +710,7 @@ def notifications(  # noqa: PLR0913, PLR0915
         if not edges:
             console.print("No notifications.")
             return
-        table = Table(title="🔔 Notifications")
-        table.add_column("Text")
-        table.add_column("Type")
-        table.add_column("Date")
-        table.add_column("Read")
-        table.add_column("On date")
+        rows = []
         for item in edges:
             node = item.get("node", {})
             data_json = node.get("data")
@@ -716,14 +719,17 @@ def notifications(  # noqa: PLR0913, PLR0915
                 with suppress(Exception):
                     parsed = json.loads(data_json)
                     data_date = parsed.get("date")
-            table.add_row(
-                str(node.get("text", "")),
-                str(node.get("type", "")),
-                str(node.get("notifyOn", "")),
-                "yes" if node.get("isRead") else "no",
-                str(data_date) if data_date else "-",
+            rows.append(
+                (
+                    str(node.get("text", "")),
+                    str(node.get("type", "")),
+                    str(node.get("notifyOn", "")),
+                    "yes" if node.get("isRead") else "no",
+                    str(data_date) if data_date else "-",
+                )
             )
-        console.print(table)
+        headers = ["Text", "Type", "Date", "Read", "On date"]
+        _print_table("🔔 Notifications", rows, headers)
 
     if mark_read and collected_edges:
         mutation = queries.SET_NOTIFICATION_READ
@@ -780,25 +786,20 @@ def announcements(
         if not edges:
             console.print("No announcements.")
             return
-        table = Table(title="📢 Announcements", show_lines=True)
-        table.add_column("Title")
-        table.add_column("Text")
-        table.add_column("Created")
-        table.add_column("Author")
-        preview_len = 120
+        rows = []
         for item in edges:
             node = item.get("node", {})
-            text = node.get("text", "")
-            preview = str(text)[:preview_len]
-            if text and len(str(text)) > preview_len:
-                preview += "..."
-            table.add_row(
-                str(node.get("title", "")),
-                preview,
-                str(node.get("created", "")),
-                str((node.get("createdBy") or {}).get("fullName", "")),
+            text = _truncate(node.get("text", ""), 120)
+            rows.append(
+                (
+                    str(node.get("title", "")),
+                    text,
+                    str(node.get("created", "")),
+                    str((node.get("createdBy") or {}).get("fullName", "")),
+                )
             )
-        console.print(table)
+        headers = ["Title", "Text", "Created", "Author"]
+        _print_table("📢 Announcements", rows, headers, show_lines=True)
 
 
 @app.command("quick-calendar")
@@ -1274,26 +1275,23 @@ def payments(  # noqa: PLR0913
     if not edges:
         console.print("No payments.")
         return
-    table = Table(title="💳 Payments")
-    table.add_column("Title")
-    table.add_column("Amount")
-    table.add_column("Date")
-    table.add_column("Type")
-    table.add_column("Booked")
-    table.add_column("Child")
+    rows = []
     for item in edges:
         node = item.get("node", {})
         child = node.get("child") or {}
         child_name = f"{child.get('name','')} {child.get('surname','')}".strip()
-        table.add_row(
-            str(node.get("title", "")),
-            str(node.get("amount", "")),
-            str(node.get("paymentDate", "")),
-            str(node.get("type", "")),
-            "yes" if node.get("isBooked") else "no",
-            child_name or "-",
+        rows.append(
+            (
+                str(node.get("title", "")),
+                str(node.get("amount", "")),
+                str(node.get("paymentDate", "")),
+                str(node.get("type", "")),
+                "yes" if node.get("isBooked") else "no",
+                child_name or "-",
+            )
         )
-    console.print(table)
+    headers = ["Title", "Amount", "Date", "Type", "Booked", "Child"]
+    _print_table("💳 Payments", rows, headers)
 
 
 @app.command("payments-summary")
@@ -1336,23 +1334,21 @@ def payments_summary(  # noqa: PLR0913
         console.print("No payments summary entries.")
         return
     title = f"💳 Payments summary (full balance: {summary.get('fullBalance','')})"
-    table = Table(title=title)
-    table.add_column("Child")
-    table.add_column("Amount")
-    table.add_column("Paid")
-    table.add_column("Balance")
-    table.add_column("Paid bills")
+    rows = []
     for item in edges:
         node = item.get("node", {}) or {}
         child_name = f"{node.get('name','')} {node.get('surname','')}".strip()
-        table.add_row(
-            child_name or "-",
-            str(node.get("amount", "")),
-            str(node.get("paidAmount", "")),
-            str(node.get("balance", "")),
-            str(node.get("paidMonthlyBillsCount", "")),
+        rows.append(
+            (
+                child_name or "-",
+                str(node.get("amount", "")),
+                str(node.get("paidAmount", "")),
+                str(node.get("balance", "")),
+                str(node.get("paidMonthlyBillsCount", "")),
+            )
         )
-    console.print(table)
+    headers = ["Child", "Amount", "Paid", "Balance", "Paid bills"]
+    _print_table(title, rows, headers)
 
 
 @app.command("payment-orders")
@@ -1408,22 +1404,20 @@ def payment_orders(  # noqa: PLR0913
     if not edges:
         console.print("No payment orders.")
         return
-    table = Table(title="💸 Payment orders")
-    table.add_column("ID")
-    table.add_column("Created")
-    table.add_column("Amount")
-    table.add_column("Status")
-    table.add_column("Booking date")
+    rows = []
     for item in edges:
         node = item.get("node", {}) or {}
-        table.add_row(
-            str(node.get("id", "")),
-            str(node.get("created", "")),
-            str(node.get("amount", "")),
-            str(node.get("bluemediaPaymentStatus", "")),
-            str(node.get("bookingDate", "")),
+        rows.append(
+            (
+                str(node.get("id", "")),
+                str(node.get("created", "")),
+                str(node.get("amount", "")),
+                str(node.get("bluemediaPaymentStatus", "")),
+                str(node.get("bookingDate", "")),
+            )
         )
-    console.print(table)
+    headers = ["ID", "Created", "Amount", "Status", "Booking date"]
+    _print_table("💸 Payment orders", rows, headers)
 
 
 @app.command("payment-components")
@@ -1459,19 +1453,17 @@ def payment_components(
     if not edges:
         console.print("No payment components.")
         return
-    rows = []
-    for edge in edges:
-        node = edge.get("node") or {}
-        rows.append(
-            (
-                str(node.get("id", "")),
-                str(node.get("name", "")),
-                str(node.get("typeName", "")),
-                str(node.get("fee", "")),
-                str(node.get("billingRepeatTypeName", "")),
-                str(node.get("feePeriodTypeName", "")),
-            )
+    rows = [
+        (
+            str((edge.get("node") or {}).get("id", "")),
+            str((edge.get("node") or {}).get("name", "")),
+            str((edge.get("node") or {}).get("typeName", "")),
+            str((edge.get("node") or {}).get("fee", "")),
+            str((edge.get("node") or {}).get("billingRepeatTypeName", "")),
+            str((edge.get("node") or {}).get("feePeriodTypeName", "")),
         )
+        for edge in edges
+    ]
     headers = ["ID", "Name", "Type", "Fee", "Repeat", "Period"]
     _print_table("🧾 Payment components", rows, headers)
 
@@ -1504,18 +1496,15 @@ def billing_periods(
     if not edges:
         console.print("No billing periods.")
         return
-    rows = []
-    for edge in edges:
-        node = edge.get("node") or {}
-        month = node.get("month") or {}
-        rows.append(
-            (
-                str(node.get("id", "")),
-                str(month.get("startDate", "")),
-                str(month.get("endDate", "")),
-                "yes" if node.get("isClosed") else "no",
-            )
+    rows = [
+        (
+            str((edge.get("node") or {}).get("id", "")),
+            str(((edge.get("node") or {}).get("month") or {}).get("startDate", "")),
+            str(((edge.get("node") or {}).get("month") or {}).get("endDate", "")),
+            "yes" if (edge.get("node") or {}).get("isClosed") else "no",
         )
+        for edge in edges
+    ]
     headers = ["ID", "Start", "End", "Closed"]
     _print_table("🗓 Billing periods", rows, headers)
 
@@ -1553,20 +1542,17 @@ def employee_billing_periods(
     if not edges:
         console.print("No employee billing periods.")
         return
-    rows = []
-    for edge in edges:
-        node = edge.get("node") or {}
-        month = node.get("month") or {}
-        rows.append(
-            (
-                str(node.get("id", "")),
-                str(month.get("startDate", "")),
-                str(month.get("endDate", "")),
-                "yes" if node.get("isClosed") else "no",
-                str(node.get("monthlyBillsTotalAmount", "")),
-                str(node.get("monthlyBillsTotalPaid", "")),
-            )
+    rows = [
+        (
+            str((edge.get("node") or {}).get("id", "")),
+            str(((edge.get("node") or {}).get("month") or {}).get("startDate", "")),
+            str(((edge.get("node") or {}).get("month") or {}).get("endDate", "")),
+            "yes" if (edge.get("node") or {}).get("isClosed") else "no",
+            str((edge.get("node") or {}).get("monthlyBillsTotalAmount", "")),
+            str((edge.get("node") or {}).get("monthlyBillsTotalPaid", "")),
         )
+        for edge in edges
+    ]
     headers = ["ID", "Start", "End", "Closed", "Total", "Paid"]
     _print_table("🗓 Employee billing periods", rows, headers)
 
@@ -1594,17 +1580,16 @@ def tuition_discounts(json_output: bool = typer.Option(False, "--json/--no-json"
     if not discounts:
         console.print("No tuition discounts.")
         return
-    rows = []
-    for d in discounts:
-        rows.append(
-            (
-                str(d.get("id", "")),
-                str(d.get("name", "")),
-                str(d.get("value", "")),
-                str(d.get("valueType", "")),
-                "yes" if d.get("active") else "no",
-            )
+    rows = [
+        (
+            str(d.get("id", "")),
+            str(d.get("name", "")),
+            str(d.get("value", "")),
+            str(d.get("valueType", "")),
+            "yes" if d.get("active") else "no",
         )
+        for d in discounts
+    ]
     headers = ["ID", "Name", "Value", "Type", "Active"]
     _print_table("🏷 Tuition discounts", rows, headers)
 
@@ -1632,15 +1617,14 @@ def employee_roles(json_output: bool = typer.Option(False, "--json/--no-json")) 
     if not roles:
         console.print("No employee roles.")
         return
-    rows = []
-    for r in roles:
-        rows.append(
-            (
-                str(r.get("id", "")),
-                str(r.get("name", "")),
-                ", ".join(sorted([str(p) for p in (r.get("permissions") or [])])),
-            )
+    rows = [
+        (
+            str(r.get("id", "")),
+            str(r.get("name", "")),
+            ", ".join(sorted([str(p) for p in (r.get("permissions") or [])])),
         )
+        for r in roles
+    ]
     headers = ["ID", "Name", "Permissions"]
     _print_table("👥 Employee roles", rows, headers)
 
@@ -1673,21 +1657,18 @@ def employees(
     if not edges:
         console.print("No employees.")
         return
-    rows = []
-    for edge in edges:
-        node = edge.get("node") or {}
-        full_name = f"{node.get('firstName','')} {node.get('lastName','')}".strip()
-        role = (node.get("role") or {}).get("name", "")
-        rows.append(
-            (
-                str(node.get("id", "")),
-                full_name,
-                str(node.get("email", "")),
-                str(node.get("phone", "")),
-                role,
-                str(node.get("position", "")),
-            )
+    rows = [
+        (
+            str((edge.get("node") or {}).get("id", "")),
+            f"{(edge.get('node') or {}).get('firstName','')} "
+            f"{(edge.get('node') or {}).get('lastName','')}".strip(),
+            str((edge.get("node") or {}).get("email", "")),
+            str((edge.get("node") or {}).get("phone", "")),
+            str(((edge.get("node") or {}).get("role") or {}).get("name", "")),
+            str((edge.get("node") or {}).get("position", "")),
         )
+        for edge in edges
+    ]
     headers = ["ID", "Name", "Email", "Phone", "Role", "Position"]
     _print_table("👤 Employees", rows, headers)
 
@@ -1777,20 +1758,17 @@ def galleries(  # noqa: PLR0913
         if not edges:
             console.print("No galleries.")
             return
-        table = Table(title="🖼️ Galleries", show_lines=True)
-        table.add_column("ID")
-        table.add_column("Name")
-        table.add_column("Created")
-        table.add_column("Images")
-        for item in edges:
-            node = item.get("node", {})
-            table.add_row(
-                str(node.get("id", "")),
-                str(node.get("name", "")),
-                str(node.get("created", "")),
-                str(node.get("imagesCount", "")),
+        rows = [
+            (
+                str((item.get("node") or {}).get("id", "")),
+                str((item.get("node") or {}).get("name", "")),
+                str((item.get("node") or {}).get("created", "")),
+                str((item.get("node") or {}).get("imagesCount", "")),
             )
-        console.print(table)
+            for item in edges
+        ]
+        headers = ["ID", "Name", "Created", "Images"]
+        _print_table("🖼️ Galleries", rows, headers, show_lines=True)
 
 
 @app.command()
@@ -2004,35 +1982,37 @@ def chat_messages(
     if not messages:
         console.print("No messages.")
         return
-    title = f"💬 Messages in {thread.get('name','')}"
-    table = Table(title=title)
-    table.add_column("ID")
-    table.add_column("Created")
-    table.add_column("Sender")
-    table.add_column("Read")
-    table.add_column("Type")
-    table.add_column("Modified")
-    table.add_column("Recipients")
-    table.add_column("Last message")
-    table.add_column("Text")
+    rows = []
     for item in messages:
         node = item.get("node", {})
         sender = (node.get("sender") or {}).get("fullName", "")
         text = str(node.get("text", ""))
-        preview = text if len(text) <= TEXT_PREVIEW else text[: (TEXT_PREVIEW - 3)] + "..."
-        table.add_row(
-            str(node.get("id", "")),
-            str(node.get("created", "")),
-            str(sender),
-            "yes" if node.get("read") else "no",
-            str(thread.get("type", "")),
-            str(thread.get("modified", "")),
-            ", ".join(r.get("fullName", "") for r in (thread.get("recipients") or [])),
-            str(thread.get("lastMessage", "")[:LAST_MSG_PREVIEW])
-            + ("..." if len(str(thread.get("lastMessage", ""))) > LAST_MSG_PREVIEW else ""),
-            preview,
+        preview = _truncate(text, TEXT_PREVIEW)
+        rows.append(
+            (
+                str(node.get("id", "")),
+                str(node.get("created", "")),
+                str(sender),
+                "yes" if node.get("read") else "no",
+                str(thread.get("type", "")),
+                str(thread.get("modified", "")),
+                ", ".join(r.get("fullName", "") for r in (thread.get("recipients") or [])),
+                _truncate(str(thread.get("lastMessage", "")), LAST_MSG_PREVIEW),
+                preview,
+            )
         )
-    console.print(table)
+    headers = [
+        "ID",
+        "Created",
+        "Sender",
+        "Read",
+        "Type",
+        "Modified",
+        "Recipients",
+        "Last message",
+        "Text",
+    ]
+    _print_table(f"💬 Messages in {thread.get('name','')}", rows, headers)
 
 
 @app.command()
