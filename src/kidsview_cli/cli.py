@@ -1528,7 +1528,7 @@ def applications(
 
 
 @app.command()
-def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:  # noqa: PLR0915
+def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:  # noqa: PLR0912, PLR0915
     """Fetch current user profile and context."""
     settings = Settings()
     tokens = _load_tokens(settings)
@@ -1595,27 +1595,46 @@ def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:  # 
             )
         console.print(ptable)
 
-    # Optional: show available years for current preschool context
-    if context and context.preschool_id:
-        try:
-            years_data = _fetch_years(settings, tokens, context)
-            years_list = years_data.get("years") if isinstance(years_data, dict) else None
-        except ApiError:
-            years_list = None
-        if years_list:
-            ytable = Table(title="📆 Years")
-            ytable.add_column("ID")
-            ytable.add_column("Display")
-            ytable.add_column("Start")
-            ytable.add_column("End")
-            for y in years_list:
-                ytable.add_row(
-                    str(y.get("id", "")),
-                    str(y.get("displayName", "")),
-                    str(y.get("startDate", "")),
-                    str(y.get("endDate", "")),
+    # Years: prefer data already returned in `me` under the matching preschool; fallback to query
+    preschool_id = context.preschool_id if context else None
+    if not preschool_id and preschools:
+        preschool_id = str((preschools[0] or {}).get("id", "")) or None
+
+    years_list: list[dict[str, Any]] | None = None
+    if preschool_id:
+        for pre in preschools:
+            if str(pre.get("id", "")) == preschool_id:
+                edges = (pre.get("years") or {}).get("edges") or []
+                years_list = [e.get("node", {}) for e in edges if e.get("node")]
+                break
+        if not years_list:
+            years_ctx = context or Context(preschool_id=preschool_id)
+            if years_ctx.preschool_id != preschool_id:
+                years_ctx = Context(
+                    child_id=years_ctx.child_id,
+                    preschool_id=preschool_id,
+                    year_id=years_ctx.year_id,
+                    locale=years_ctx.locale,
                 )
-            console.print(ytable)
+            try:
+                years_data = _fetch_years(settings, tokens, years_ctx)
+                years_list = years_data.get("years") if isinstance(years_data, dict) else None
+            except ApiError:
+                years_list = None
+    if years_list:
+        ytable = Table(title="📆 Years")
+        ytable.add_column("ID")
+        ytable.add_column("Display")
+        ytable.add_column("Start")
+        ytable.add_column("End")
+        for y in years_list:
+            ytable.add_row(
+                str(y.get("id", "")),
+                str(y.get("displayName", "")),
+                str(y.get("startDate", "")),
+                str(y.get("endDate", "")),
+            )
+        console.print(ytable)
 
 
 def _print_active_child(child: dict[str, Any]) -> None:

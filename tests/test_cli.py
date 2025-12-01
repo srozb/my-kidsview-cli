@@ -681,3 +681,64 @@ def test_me_pretty(tmp_path: Path, monkeypatch) -> None:
     assert "R S" in result.stdout
     assert "Klasa 2" in result.stdout
     assert "PS1" in result.stdout
+
+
+@respx.mock
+def test_me_shows_years_without_extra_query(tmp_path: Path, monkeypatch) -> None:
+    session_path = _make_session(tmp_path)
+    monkeypatch.setenv("KIDSVIEW_SESSION_FILE", str(session_path))
+
+    ctx_store = ContextStore(tmp_path / "context.json")
+    ctx_store.save(Context(preschool_id="pre1"))
+    monkeypatch.setenv("KIDSVIEW_CONTEXT_FILE", str(ctx_store.path))
+
+    respx.post("https://backend.kidsview.pl/graphql").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": {
+                    "me": {
+                        "fullName": "User One",
+                        "email": "u@example.com",
+                        "phone": "123",
+                        "userPosition": "Opiekun",
+                        "userType": "parent",
+                        "children": [
+                            {
+                                "id": "c1",
+                                "name": "H",
+                                "surname": "R",
+                                "group": {"name": "Klasa 2"},
+                                "balance": "0.00",
+                            }
+                        ],
+                        "availablePreschools": [
+                            {
+                                "id": "pre1",
+                                "name": "PS1",
+                                "phone": "111",
+                                "email": "ps1@example.com",
+                                "address": "Street 1",
+                                "years": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "id": "year1",
+                                                "displayName": "2024/25",
+                                                "startDate": "2024-09-01",
+                                                "endDate": "2025-08-31",
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    }
+                }
+            },
+        )
+    )
+
+    result = runner.invoke(app, ["me"])
+    assert result.exit_code == 0
+    assert "2024/25" in result.stdout

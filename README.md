@@ -4,13 +4,15 @@ Klient CLI platformy Kidsview (app.kidsview.pl). Stworzony z myślą o wygodnej 
 
 ## Szybki start
 1. Wymagania: Python 3.11+, `uv` zainstalowany globalnie.
-2. Instalacja zależności: `uv sync`.
-3. Uruchom pomoc: `uv run kidsview-cli --help` (alias: `uv run kv-cli --help`).
-4. Podstawowe logowanie: `uv run kidsview-cli login` (zapisze tokeny w `~/.config/kidsview-cli/session.json`).
+2. Instalacja CLI (bez klonowania repo):
+   `uv tool install git+https://github.com/srozb/my-kidsview-cli.git`
+   Dostępne entrypointy: `kidsview-cli` i alias `kv-cli`.
+3. Uruchom pomoc: `kv-cli --help`.
+4. Podstawowe logowanie: `kv-cli login` (zapisze tokeny w `~/.config/kidsview-cli/session.json`).
 5. Ustaw kontekst automatycznie (placówka/dziecko/rok → ciasteczka):
-   `uv run kidsview-cli context --auto`
+   `kv-cli context --auto`
    Jeśli jest wiele opcji, CLI zapyta interaktywnie (Rich); pojedyncze wybiera automatycznie. Aby wymusić ponowny wybór mimo istniejącego kontekstu, użyj `--change`. Wybrane wartości zapisze do `~/.config/kidsview-cli/context.json` i będzie ich używać do budowy ciasteczek dla wszystkich zapytań.
-6. Autouzupełnianie: `uv run kidsview-cli --install-completion` (bash/zsh/fish) — ułatwia pracę z wieloma flagami.
+6. Autouzupełnianie: `kv-cli --install-completion` (bash/zsh/fish) — ułatwia pracę z wieloma flagami.
 
 ## Konfiguracja uwierzytelniania
 - Region: `eu-west-1`
@@ -43,6 +45,7 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 ## Kontekst cookies i tokeny
 - CLI automatycznie buduje ciasteczka z kontekstu zapisanego w `~/.config/kidsview-cli/context.json` (ustaw `kidsview-cli context --auto` lub ręcznie podaj `--child-id/--preschool-id/--year-id`). Nie musisz ręcznie wklejać ciasteczek.
 - Jeśli potrzebujesz nadpisać ciasteczka, możesz użyć `KIDSVIEW_COOKIES="active_child=...; active_year=...; preschool=...; locale=pl"` – wtedy CLI użyje ich zamiast kontekstu.
+- Komenda `me` pokazuje placówki (ID), dzieci i lata (Years) — możesz z niej skopiować wartości potrzebne do ręcznego ustawienia kontekstu.
 - Domyślnie nagłówek `Authorization: JWT <id_token>`. Aby wymusić access token:
   `KIDSVIEW_AUTH_TOKEN_PREFERENCE=access uv run kidsview-cli ...`
 - Domyślny katalog pobierania galerii: `~/Pictures/Kidsview` (zmień przez `KIDSVIEW_DOWNLOAD_DIR` lub `--output-dir`).
@@ -62,7 +65,8 @@ print(data)
 Możesz wykorzystać `GraphQLClient` i modele w innych projektach (np. publikacja wyników do MQTT dla Home Assistant).
 
 ## Instalacja globalna (uv tool)
-- Z tagu releasu: `uv tool install git+https://github.com/USER/kidsview-cli.git@v0.3.0`
+- Z repo (aktualny HEAD): `uv tool install git+https://github.com/srozb/my-kidsview-cli.git`
+- Z konkretnego tagu: `uv tool install git+https://github.com/srozb/my-kidsview-cli.git@v0.3.1`
 - Dostępne entrypointy: `kidsview-cli` i krótszy alias `kv-cli`.
 
 ## Testy i jakość
