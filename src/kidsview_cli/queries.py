@@ -180,6 +180,8 @@ query paymentsSummary(
   $balanceLte: Decimal
   $paidMonthlyBillsCountGte: Int
   $paidMonthlyBillsCountLte: Int
+  $childrenFirst: Int
+  $childrenAfter: String
 ) {
   paymentsSummary(
     search: $search
@@ -192,7 +194,7 @@ query paymentsSummary(
     paidMonthlyBillsCountLte: $paidMonthlyBillsCountLte
   ) {
     fullBalance
-    children(first: 50) {
+    children(first: $childrenFirst, after: $childrenAfter) {
       edges {
         node {
           id

@@ -37,7 +37,7 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 | `applications` / `application-submit` | Lista wniosków, składanie wniosku. |
 | `absence --date today` | Zgłoszenie nieobecności (domyślnie dziecko z kontekstu). |
 | `meals` / `colors` / `unread` | Dieta, kolory placówek, liczniki nieprzeczytanych. |
-| `quick-calendar` / `schedule` / `calendar` | Szybki kalendarz, plan grupy, kalendarz. |
+| `quick-calendar` / `schedule` / `calendar` | Szybki kalendarz, plan grupy, kalendarz (obsługa `--week/--month/--days`). |
 | `observations` | Obserwacje zajęć dodatkowych. |
 
 ## Kontekst cookies i tokeny

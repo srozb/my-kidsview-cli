@@ -143,6 +143,11 @@ def _prompt_thread_selection(edges: list[dict[str, Any]]) -> str:
     raise typer.Exit(code=1)
 
 
+LAST_MSG_PREVIEW = 50
+TEXT_PREVIEW = 80
+MONTH_LAST = 12
+
+
 def _fetch_me(settings: Settings, tokens: Any, ctx: Context | None) -> dict[str, Any]:
     return _execute_graphql(settings, tokens, queries.ME, {}, ctx, label="me")
 
@@ -629,6 +634,8 @@ def payments_summary(  # noqa: PLR0913
     balance_lte: str | None = typer.Option(None, help="Max balance (Decimal)."),
     paid_count_gte: int | None = typer.Option(None, help="Min paid monthly bills count."),
     paid_count_lte: int | None = typer.Option(None, help="Max paid monthly bills count."),
+    children_first: int = typer.Option(50, help="Number of children to fetch."),
+    children_after: str | None = typer.Option(None, help="Cursor for children pagination."),
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payments summary (balances per child)."""
@@ -642,6 +649,8 @@ def payments_summary(  # noqa: PLR0913
         "balanceLte": balance_lte,
         "paidMonthlyBillsCountGte": paid_count_gte,
         "paidMonthlyBillsCountLte": paid_count_lte,
+        "childrenFirst": children_first,
+        "childrenAfter": children_after,
     }
     data = _execute_graphql(
         settings, tokens, queries.PAYMENTS_SUMMARY, variables, context, label="paymentsSummary"
@@ -677,11 +686,14 @@ def payments_summary(  # noqa: PLR0913
 
 
 @app.command("payment-orders")
-def payment_orders(
+def payment_orders(  # noqa: PLR0913
     first: int = typer.Option(20, help="Number of orders."),
     after: str | None = typer.Option(None, help="Cursor after."),
     before: str | None = typer.Option(None, help="Cursor before."),
     offset: int | None = typer.Option(None, help="Offset for pagination."),
+    status: str | None = typer.Option(None, help="Filter by payment status (client-side)."),
+    created_from: str | None = typer.Option(None, help="Filter created >= (YYYY-MM-DD)."),
+    created_to: str | None = typer.Option(None, help="Filter created <= (YYYY-MM-DD)."),
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payment orders."""
@@ -697,11 +709,32 @@ def payment_orders(
     data = _execute_graphql(
         settings, tokens, queries.PAYMENT_ORDERS, variables, context, label="paymentOrders"
     )
-    payload = {"paymentOrders": data.get("paymentOrders")}
+    orders = data.get("paymentOrders") or {}
+    edges = orders.get("edges") or []
+    # client-side filters
+    if status:
+        edges = [
+            e
+            for e in edges
+            if str((e.get("node") or {}).get("bluemediaPaymentStatus", "")).lower()
+            == status.lower()
+        ]
+    if created_from:
+        edges = [
+            e
+            for e in edges
+            if str((e.get("node") or {}).get("created", "")) >= _normalize_date(created_from)
+        ]
+    if created_to:
+        edges = [
+            e
+            for e in edges
+            if str((e.get("node") or {}).get("created", "")) <= _normalize_date(created_to)
+        ]
+    payload = {"paymentOrders": {**orders, "edges": edges}}
     if json_output:
         console.print_json(data=payload)
         return
-    edges = (payload.get("paymentOrders") or {}).get("edges") or []
     if not edges:
         console.print("No payment orders.")
         return
@@ -1209,13 +1242,16 @@ def _normalize_date(value: str) -> str:
 
 
 @app.command("quick-calendar")
-def quick_calendar(
+def quick_calendar(  # noqa: PLR0913
     date_from: str = typer.Option(
         "today", help="Start date (YYYY-MM-DD) or 'today'/'tomorrow'/'yesterday'."
     ),
     date_to: str = typer.Option(
         "today", help="End date (YYYY-MM-DD) or 'today'/'tomorrow'/'yesterday'."
     ),
+    week: bool = typer.Option(False, "--week", help="Set range to current week."),
+    month: bool = typer.Option(False, "--month", help="Set range to current month."),
+    days: int | None = typer.Option(None, "--days", help="Set range to N days starting today."),
     groups_ids: str = typer.Option("", help="Comma-separated group IDs."),
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
@@ -1224,10 +1260,32 @@ def quick_calendar(
     tokens = _load_tokens(settings)
     context = ContextStore(settings.context_file).load()
 
+    def _compute_range() -> tuple[str, str]:
+        if days:
+            start = date.today()
+            end = start + timedelta(days=days)
+            return start.isoformat(), end.isoformat()
+        if week:
+            today = date.today()
+            start = today - timedelta(days=today.weekday())
+            end = start + timedelta(days=6)
+            return start.isoformat(), end.isoformat()
+        if month:
+            today = date.today()
+            start = today.replace(day=1)
+            if start.month == MONTH_LAST:
+                end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end = start.replace(month=start.month + 1, day=1) - timedelta(days=1)
+            return start.isoformat(), end.isoformat()
+        return _normalize_date(date_from), _normalize_date(date_to)
+
+    range_from, range_to = _compute_range()
+
     variables: dict[str, object] = {
         "groupsIds": [g for g in groups_ids.split(",") if g] or None,
-        "dateFrom": _normalize_date(date_from),
-        "dateTo": _normalize_date(date_to),
+        "dateFrom": range_from,
+        "dateTo": range_to,
     }
     data = _execute_graphql(
         settings, tokens, queries.QUICK_CALENDAR, variables, context, label="quickCalendar"
@@ -1659,6 +1717,9 @@ def calendar(  # noqa: PLR0913
     date_to: str = typer.Option(
         "today", help="End date (YYYY-MM-DD) or 'today'/'tomorrow'/'yesterday'."
     ),
+    week: bool = typer.Option(False, "--week", help="Set range to current week (Mon-Sun)."),
+    month: bool = typer.Option(False, "--month", help="Set range to current month."),
+    days: int | None = typer.Option(None, "--days", help="Set range to N days starting today."),
     groups_ids: str = typer.Option("", help="Comma-separated group IDs."),
     activity_types: str = typer.Option("0,1,5,9", help="Comma-separated activity type ints."),
     show_canceled: bool | None = typer.Option(None, help="Include canceled activities."),
@@ -1675,10 +1736,32 @@ def calendar(  # noqa: PLR0913
         [int(x) for x in activity_types.split(",") if x.strip()] if activity_types else None
     )
 
+    def _compute_range() -> tuple[str, str]:
+        if days:
+            start = date.today()
+            end = start + timedelta(days=days)
+            return start.isoformat(), end.isoformat()
+        if week:
+            today = date.today()
+            start = today - timedelta(days=today.weekday())
+            end = start + timedelta(days=6)
+            return start.isoformat(), end.isoformat()
+        if month:
+            today = date.today()
+            start = today.replace(day=1)
+            if start.month == MONTH_LAST:
+                end = start.replace(year=start.year + 1, month=1, day=1) - timedelta(days=1)
+            else:
+                end = start.replace(month=start.month + 1, day=1) - timedelta(days=1)
+            return start.isoformat(), end.isoformat()
+        return _normalize_date(date_from), _normalize_date(date_to)
+
+    range_from, range_to = _compute_range()
+
     variables: dict[str, object] = {
         "groupsIds": groups_list or None,
-        "dateFrom": _normalize_date(date_from),
-        "dateTo": _normalize_date(date_to),
+        "dateFrom": range_from,
+        "dateTo": range_to,
         "activityTypes": activity_type_list,
         "showCanceledActivities": show_canceled,
         "forSchedule": for_schedule,
