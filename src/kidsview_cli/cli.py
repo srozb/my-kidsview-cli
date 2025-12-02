@@ -457,7 +457,7 @@ def announcements(
 def monthly_bills(  # noqa: PLR0913
     year: str = typer.Option("", help="Year node ID (e.g., WWVhck5vZGU6MjM4OA==)."),
     child: str | None = typer.Option(None, help="Child ID."),
-    is_paid: bool | None = typer.Option(True, help="Filter by paid status."),
+    unpaid: bool = typer.Option(False, "--unpaid", help="Show only unpaid bills."),
     first: int = typer.Option(10, help="Items to fetch."),
     after: str | None = typer.Option(None, help="Cursor for pagination."),
     json_output: bool = typer.Option(False, "--json/--no-json"),
@@ -466,7 +466,7 @@ def monthly_bills(  # noqa: PLR0913
     variables = {
         "year": year,
         "child": child,
-        "isPaid": is_paid,
+        "isPaid": False if unpaid else None,
         "first": first,
         "after": after,
     }

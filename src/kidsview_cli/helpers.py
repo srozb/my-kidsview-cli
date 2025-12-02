@@ -46,7 +46,6 @@ def prompt_choice(options: list[dict[str, Any]], title: str, label_key: str) -> 
         return None
     if len(options) == 1:
         return str(options[0].get("id"))
-    from rich.table import Table  # lazy import to keep helpers light
 
     table = Table(title=title)
     table.add_column("#", justify="right")
@@ -65,7 +64,6 @@ def prompt_multi_choice(options: list[dict[str, Any]], title: str, label_key: st
     """Select one or many items by comma-separated numbers; returns list of ids."""
     if not options:
         return []
-    from rich.table import Table  # lazy import to keep helpers light
 
     table = Table(title=title)
     table.add_column("#", justify="right")
