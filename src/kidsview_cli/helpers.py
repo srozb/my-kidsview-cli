@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine, Sequence
+from datetime import date, timedelta
 from typing import Any
 
 import typer
@@ -26,6 +27,70 @@ def truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
+
+
+def normalize_date(value: str) -> str:
+    value = value.strip().lower()
+    if value == "today":
+        return date.today().isoformat()
+    if value == "tomorrow":
+        return (date.today() + timedelta(days=1)).isoformat()
+    if value == "yesterday":
+        return (date.today() - timedelta(days=1)).isoformat()
+    return value
+
+
+def prompt_choice(options: list[dict[str, Any]], title: str, label_key: str) -> str | None:
+    """Select a single item by number; returns id or None if no options."""
+    if not options:
+        return None
+    if len(options) == 1:
+        return str(options[0].get("id"))
+    from rich.table import Table  # lazy import to keep helpers light
+
+    table = Table(title=title)
+    table.add_column("#", justify="right")
+    table.add_column("Name")
+    for idx, item in enumerate(options, start=1):
+        table.add_row(str(idx), str(item.get(label_key, "")))
+    console.print(table)
+    choice = typer.prompt(f"Choose a number 1-{len(options)}", type=int)
+    if 1 <= choice <= len(options):
+        return str(options[choice - 1].get("id"))
+    console.print("[red]Invalid choice.[/red]")
+    raise typer.Exit(code=1)
+
+
+def prompt_multi_choice(options: list[dict[str, Any]], title: str, label_key: str) -> list[str]:
+    """Select one or many items by comma-separated numbers; returns list of ids."""
+    if not options:
+        return []
+    from rich.table import Table  # lazy import to keep helpers light
+
+    table = Table(title=title)
+    table.add_column("#", justify="right")
+    table.add_column("Name")
+    table.add_column("ID")
+    for idx, item in enumerate(options, start=1):
+        table.add_row(str(idx), str(item.get(label_key, "")), str(item.get("id", "")))
+    console.print(table)
+    raw = typer.prompt(f"Choose numbers (comma-separated) 1-{len(options)}", type=str)
+    picks: list[str] = []
+    for raw_part in raw.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        try:
+            num = int(part)
+        except ValueError as err:
+            console.print(f"[red]Invalid choice: {part}[/red]")
+            raise typer.Exit(code=1) from err
+        if 1 <= num <= len(options):
+            picks.append(str(options[num - 1].get("id")))
+        else:
+            console.print(f"[red]Choice out of range: {num}[/red]")
+            raise typer.Exit(code=1)
+    return picks
 
 
 def print_table(
@@ -128,7 +193,7 @@ def run_query_table(  # noqa: PLR0913
     empty_msg: str,
     headers: Sequence[str],
     title: str | Callable[[dict[str, Any]], str],
-    rows_fn: Callable[[dict[str, Any]], list[Sequence[str]]],
+    rows_fn: Callable[[dict[str, Any]], Sequence[Sequence[str]]],
     show_lines: bool = False,
 ) -> None:
     """Execute a query and render either JSON or table using a row builder."""
