@@ -1,6 +1,12 @@
 # kidsview-cli
 
-Klient CLI platformy Kidsview (app.kidsview.pl). Stworzony z myślą o wygodnej obsłudzę z poziomu konsoli oraz skryptowaniu (mqtt).
+Nieoficjalny klient CLI platformy Kidsview (app.kidsview.pl). Stworzony z myślą o wygodnej obsłudzę z poziomu konsoli oraz skryptowaniu (mqtt).
+
+> **Zastrzeżenie / informacja o projekcie:**
+> - Projekt powstaje po godzinach jako nieoficjalny klient Kidsview, tworzony przez osobę niezwiązaną z View Concept sp. z o.o. (producentem Kidsview).
+> - Nie jest wspierany ani autoryzowany przez producenta; używasz na własną odpowiedzialność, autor nie ponosi odpowiedzialności za skutki korzystania.
+> - „Kidsview” i inne znaki towarowe należą do ich właścicieli; projekt służy wyłącznie jako narzędzie pomocnicze.
+> - Przed użyciem zapoznaj się z licencją MIT i przetestuj rozwiązanie w swoim środowisku.
 
 ## Szybki start
 1. Wymagania: Python 3.11+, `uv` zainstalowany globalnie.
@@ -26,7 +32,7 @@ Wartości domyślne są wpisane w `Settings`. W razie zmian nadpisz zmiennymi ś
 | --- | --- |
 | `graphql --query ...` | Dowolne zapytanie GraphQL (inline lub `@plik.graphql`). |
 | `announcements --first 10` | Ogłoszenia. |
-| `monthly-bills --year ... --is-paid true` | Rachunki miesięczne. |
+| `monthly-bills --year ... [--unpaid]` | Rachunki miesięczne (domyślnie wszystkie, `--unpaid` tylko niezapłacone). |
 | `payments` / `payments-summary` / `payment-orders` | Historia płatności, podsumowanie, zlecenia płatności. |
 | `payment-components` / `billing-periods` / `employee-billing-periods` | Składniki opłat, okresy rozliczeniowe (również dla pracowników). |
 | `tuition-discounts` | Lista zniżek czesnego (jeśli dostępne). |
