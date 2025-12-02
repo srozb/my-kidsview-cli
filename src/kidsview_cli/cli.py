@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Coroutine, Sequence
+from collections.abc import Sequence
 from contextlib import suppress
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import typer
-from rich.console import Console
 from rich.pretty import Pretty
 from rich.table import Table
 
@@ -20,14 +19,34 @@ from .client import ApiError, GraphQLClient
 from .config import Settings
 from .context import Context, ContextStore
 from .download import download_all, fetch_galleries, make_progress
-from .session import AuthTokens, SessionStore
+from .helpers import (
+    console,
+    run_query_table,
+)
+from .helpers import (
+    env as _env,
+)
+from .helpers import (
+    execute_graphql as _execute_graphql,
+)
+from .helpers import (
+    fetch_me as _fetch_me,
+)
+from .helpers import (
+    fetch_years as _fetch_years,
+)
+from .helpers import (
+    print_table as _print_table,
+)
+from .helpers import (
+    run as _run,
+)
+from .helpers import (
+    truncate as _truncate,
+)
+from .session import SessionStore
 
 app = typer.Typer(help="Kidsview CLI for humans and automation.")
-console = Console()
-
-
-def _run(coro: Coroutine[Any, Any, Any]) -> Any:
-    return asyncio.run(coro)
 
 
 def _prompt_choice(options: list[dict[str, Any]], title: str, label_key: str) -> str | None:
@@ -117,6 +136,22 @@ def _render_threads_table(edges: list[dict[str, Any]], title: str = "💬 Chat t
     return table
 
 
+def _rows_for_threads(
+    edges: list[dict[str, Any]], *, include_id: bool = True
+) -> list[Sequence[str]]:
+    rows: list[Sequence[str]] = []
+    for idx, item in enumerate(edges, start=1):
+        node = item.get("node", {}) or {}
+        row = _render_thread_row(node)
+        if include_id:
+            rows.append(row)
+        else:
+            rows.append(row[1:])  # skip ID
+        item["_resolved_id"] = row[0]
+        item["_display_index"] = idx
+    return rows
+
+
 def _prompt_thread_selection(edges: list[dict[str, Any]]) -> str:
     """Prompt user to pick a thread from edges; returns thread ID or exits."""
     if not edges:
@@ -146,103 +181,6 @@ def _prompt_thread_selection(edges: list[dict[str, Any]]) -> str:
 LAST_MSG_PREVIEW = 50
 TEXT_PREVIEW = 80
 MONTH_LAST = 12
-
-
-def _truncate(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
-
-
-def _print_table(
-    title: str, rows: Sequence[Sequence[str]], headers: Sequence[str], *, show_lines: bool = False
-) -> None:
-    table = Table(title=title, show_lines=show_lines)
-    for h in headers:
-        table.add_column(h)
-    for row in rows:
-        table.add_row(*[str(x) for x in row])
-    console.print(table)
-
-
-def _fetch_me(settings: Settings, tokens: Any, ctx: Context | None) -> dict[str, Any]:
-    return _execute_graphql(settings, tokens, queries.ME, {}, ctx, label="me")
-
-
-def _fetch_years(settings: Settings, tokens: Any, ctx: Context | None) -> dict[str, Any]:
-    return _execute_graphql(settings, tokens, queries.YEARS, {}, ctx, label="years")
-
-
-def _load_tokens(settings: Settings) -> AuthTokens:
-    store = SessionStore(settings.session_file)
-    tokens = store.load()
-    if not tokens:
-        console.print("[red]No session found. Run `kidsview-cli login` first.[/red]")
-        raise typer.Exit(code=1)
-    return tokens
-
-
-def _execute_graphql(  # noqa: PLR0913
-    settings: Settings,
-    tokens: AuthTokens,
-    query: str,
-    variables: dict[str, Any] | None,
-    ctx: Context | None,
-    label: str = "GraphQL",
-) -> dict[str, Any]:
-    """Execute a GraphQL query, auto-refreshing token once on failure."""
-    store = SessionStore(settings.session_file)
-    attempts = 0
-    current_tokens = tokens
-    last_error: ApiError | None = None
-
-    max_attempts = 2
-    while attempts < max_attempts:
-        client = GraphQLClient(settings, current_tokens, context=ctx)
-        try:
-            data = asyncio.run(client.execute(query, variables))
-            return data if isinstance(data, dict) else {}
-        except ApiError as exc:
-            last_error = exc
-            if attempts == 0 and current_tokens.refresh_token:
-                console.print("[yellow]Request failed, trying token refresh...[/yellow]")
-                try:
-                    refreshed = _run(AuthClient(settings).refresh(current_tokens.refresh_token))
-                    store.save(refreshed)
-                    current_tokens = refreshed
-                    attempts += 1
-                    continue
-                except AuthError as auth_exc:
-                    console.print(f"[red]Refresh failed:[/red] {auth_exc}")
-                    raise typer.Exit(code=1) from auth_exc
-            break
-
-    if last_error:
-        msg = str(last_error)
-        lower_msg = msg.lower()
-        permission_hint = (
-            "permission" in lower_msg or "odmowa dost" in lower_msg or "brak uprawnie" in lower_msg
-        )
-        if settings.debug:
-            console.print(f"[red]{label} error (debug):[/red] {msg}")
-        elif permission_hint:
-            console.print(
-                f"[red]{label} failed: access denied or insufficient permissions.[/red] "
-                f"Server message: {msg}"
-            )
-        else:
-            console.print(
-                f"[red]{label} failed.[/red] "
-                f"Try `kidsview-cli refresh` or re-login. Set KIDSVIEW_DEBUG=1 for raw error."
-            )
-    raise typer.Exit(code=1) from last_error
-
-
-def _env() -> tuple[Settings, AuthTokens, Context | None]:
-    settings = Settings()
-    tokens = _load_tokens(settings)
-    ctx = ContextStore(settings.context_file).load()
-    return settings, tokens, ctx
 
 
 @app.command()
@@ -419,7 +357,7 @@ if __name__ == "__main__":
 def me(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:  # noqa: PLR0912, PLR0915
     """Fetch current user profile and context."""
     settings, tokens, context = _env()
-    data = _execute_graphql(settings, tokens, queries.ME, {}, context, label="me")
+    data = _fetch_me(settings, tokens, context)
     payload = {"me": data.get("me")}
     if json_output:
         console.print_json(data=payload)
@@ -769,24 +707,16 @@ def announcements(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch announcements."""
-    settings, tokens, context = _env()
     variables = {"first": first, "after": after, "status": status, "phrase": phrase}
-    data = _execute_graphql(
-        settings, tokens, queries.ANNOUNCEMENTS, variables, context, label="announcements"
-    )
-    payload = {"announcements": data.get("announcements")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
+    headers = ["Title", "Text", "Created", "Author"]
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
         edges = (payload.get("announcements") or {}).get("edges") or []
-        if not edges:
-            console.print("No announcements.")
-            return
-        rows = []
+        rows_local: list[Sequence[str]] = []
         for item in edges:
             node = item.get("node", {})
-            text = _truncate(node.get("text", ""), 120)
-            rows.append(
+            text = _truncate(str(node.get("text", "")), 120)
+            rows_local.append(
                 (
                     str(node.get("title", "")),
                     text,
@@ -794,8 +724,19 @@ def announcements(
                     str((node.get("createdBy") or {}).get("fullName", "")),
                 )
             )
-        headers = ["Title", "Text", "Created", "Author"]
-        _print_table("📢 Announcements", rows, headers, show_lines=True)
+        return rows_local
+
+    run_query_table(
+        query=queries.ANNOUNCEMENTS,
+        variables=variables,
+        label="announcements",
+        json_output=json_output,
+        empty_msg="No announcements.",
+        headers=headers,
+        title="📢 Announcements",
+        rows_fn=_rows,
+        show_lines=True,
+    )
 
 
 @app.command("quick-calendar")
@@ -813,7 +754,6 @@ def quick_calendar(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch quick calendar overview (has events/new/holiday/absent)."""
-    settings, tokens, context = _env()
 
     def _compute_range() -> tuple[str, str]:
         if days:
@@ -836,40 +776,36 @@ def quick_calendar(  # noqa: PLR0913
         return _normalize_date(date_from), _normalize_date(date_to)
 
     range_from, range_to = _compute_range()
-
     variables: dict[str, object] = {
         "groupsIds": [g for g in groups_ids.split(",") if g] or None,
         "dateFrom": range_from,
         "dateTo": range_to,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.QUICK_CALENDAR, variables, context, label="quickCalendar"
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        items = payload.get("quickCalendar") or []
+        return [
+            (
+                str(node.get("date", "")),
+                "yes" if node.get("hasEvents") else "no",
+                "yes" if node.get("hasNewEvents") else "no",
+                "yes" if node.get("holiday") else "no",
+                "yes" if node.get("absent") else "no",
+                "yes" if node.get("mealsModified") else "no",
+            )
+            for node in items
+        ]
+
+    run_query_table(
+        query=queries.QUICK_CALENDAR,
+        variables=variables,
+        label="quickCalendar",
+        json_output=json_output,
+        empty_msg="No quick calendar entries.",
+        headers=["Date", "Has events", "New events", "Holiday", "Absent", "Meals modified"],
+        title="📅 Quick calendar",
+        rows_fn=_rows,
     )
-    payload = {"quickCalendar": data.get("quickCalendar")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    items = payload.get("quickCalendar") or []
-    if not items:
-        console.print("No quick calendar entries.")
-        return
-    table = Table(title="📅 Quick calendar")
-    table.add_column("Date")
-    table.add_column("Has events")
-    table.add_column("New events")
-    table.add_column("Holiday")
-    table.add_column("Absent")
-    table.add_column("Meals modified")
-    for node in items:
-        table.add_row(
-            str(node.get("date", "")),
-            "yes" if node.get("hasEvents") else "no",
-            "yes" if node.get("hasNewEvents") else "no",
-            "yes" if node.get("holiday") else "no",
-            "yes" if node.get("absent") else "no",
-            "yes" if node.get("mealsModified") else "no",
-        )
-    console.print(table)
 
 
 @app.command()
@@ -891,8 +827,6 @@ def calendar(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch calendar entries."""
-    settings, tokens, context = _env()
-
     groups_list = [g for g in groups_ids.split(",") if g] if groups_ids else []
     activity_type_list = (
         [int(x) for x in activity_types.split(",") if x.strip()] if activity_types else None
@@ -929,38 +863,35 @@ def calendar(  # noqa: PLR0913
         "forSchedule": for_schedule,
         "activityId": activity_id,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.CALENDAR, variables, context, label="calendar"
-    )
-    payload = {"calendar": data.get("calendar")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
         items = payload.get("calendar") or []
-        if not items:
-            console.print("No calendar entries.")
-            return
-        table = Table(
-            title=f"Calendar {variables['dateFrom']} to {variables['dateTo']}",
-            show_lines=True,
-        )
-        table.add_column("Title")
-        table.add_column("Start")
-        table.add_column("End")
-        table.add_column("Type")
-        table.add_column("All day")
-        table.add_column("Reported by")
+        rows_local: list[Sequence[str]] = []
         for node in items:
             reporter = (node.get("absenceReportedBy") or {}).get("fullName", "")
-            table.add_row(
-                str(node.get("title", "")),
-                str(node.get("startDate", "")),
-                str(node.get("endDate", "")),
-                str(node.get("type", "")),
-                "yes" if node.get("allDay") else "no",
-                str(reporter),
+            rows_local.append(
+                (
+                    str(node.get("title", "")),
+                    str(node.get("startDate", "")),
+                    str(node.get("endDate", "")),
+                    str(node.get("type", "")),
+                    "yes" if node.get("allDay") else "no",
+                    str(reporter),
+                )
             )
-        console.print(table)
+        return rows_local
+
+    run_query_table(
+        query=queries.CALENDAR,
+        variables=variables,
+        label="calendar",
+        json_output=json_output,
+        empty_msg="No calendar entries.",
+        headers=["Title", "Start", "End", "Type", "All day", "Reported by"],
+        title=f"Calendar {range_from} to {range_to}",
+        rows_fn=_rows,
+        show_lines=True,
+    )
 
 
 @app.command()
@@ -969,38 +900,36 @@ def schedule(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch schedule for a group."""
-    settings, tokens, context = _env()
     variables: dict[str, object] = {"group": group_id}
-    data = _execute_graphql(
-        settings, tokens, queries.SCHEDULE, variables, context, label="schedule"
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        items = payload.get("schedule") or []
+        rows: list[Sequence[str]] = []
+        for node in items:
+            groups = node.get("groupsNames")
+            groups_str = ", ".join(groups) if isinstance(groups, list) else str(groups or "")
+            rows.append(
+                (
+                    str(node.get("title", "")),
+                    str(node.get("startDate", "")),
+                    str(node.get("endDate", "")),
+                    "yes" if node.get("allDay") else "no",
+                    str(node.get("type", "")),
+                    groups_str,
+                )
+            )
+        return rows
+
+    run_query_table(
+        query=queries.SCHEDULE,
+        variables=variables,
+        label="schedule",
+        json_output=json_output,
+        empty_msg="No schedule entries.",
+        headers=["Title", "Start", "End", "All day", "Type", "Groups"],
+        title="🗓️ Schedule",
+        rows_fn=_rows,
     )
-    payload = {"schedule": data.get("schedule")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    items = payload.get("schedule") or []
-    if not items:
-        console.print("No schedule entries.")
-        return
-    table = Table(title="🗓️ Schedule")
-    table.add_column("Title")
-    table.add_column("Start")
-    table.add_column("End")
-    table.add_column("All day")
-    table.add_column("Type")
-    table.add_column("Groups")
-    for node in items:
-        table.add_row(
-            str(node.get("title", "")),
-            str(node.get("startDate", "")),
-            str(node.get("endDate", "")),
-            "yes" if node.get("allDay") else "no",
-            str(node.get("type", "")),
-            ", ".join(node.get("groupsNames") or [])
-            if isinstance(node.get("groupsNames"), list)
-            else str(node.get("groupsNames", "")),
-        )
-    console.print(table)
 
 
 @app.command()
@@ -1062,13 +991,35 @@ def absence(  # noqa: PLR0913
 @app.command()
 def meals(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch current diet info for active child."""
-    settings, tokens, context = _env()
-    data = _execute_graphql(settings, tokens, queries.CURRENT_DIET, {}, context, label="meals")
-    payload = {"currentDietForChild": data.get("currentDietForChild")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
-        console.print(Pretty(payload))
+    run_query_table(
+        query=queries.CURRENT_DIET,
+        variables={},
+        label="meals",
+        json_output=json_output,
+        empty_msg="No diet data.",
+        headers=["ID", "Body", "Category", "Attachments"],
+        title="🍽️ Current diet",
+        rows_fn=lambda payload: _rows_diet(payload),
+    )
+
+
+def _rows_diet(payload: dict[str, Any]) -> list[Sequence[str]]:
+    diet = payload.get("currentDietForChild") or {}
+    items = diet if isinstance(diet, list) else [diet] if diet else []
+    rows: list[Sequence[str]] = []
+    for item in items:
+        attachments = item.get("attachments") or {}
+        edges = attachments.get("edges") or []
+        attach_ids = [str((edge.get("node") or {}).get("id", "")) for edge in edges]
+        rows.append(
+            (
+                str(item.get("id", "")),
+                str(item.get("body", "")),
+                str((item.get("category") or {}).get("id", "")),
+                ", ".join(attach_ids),
+            )
+        )
+    return rows
 
 
 @app.command()
@@ -1088,17 +1039,36 @@ def observations(
         "childId": effective_child,
         "id": activity_id,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.ADDITIONAL_ACTIVITY_OBS, variables, context, label="observations"
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        activities = payload.get("additionalActivities") or {}
+        edges = activities.get("edges") or []
+        rows_local: list[Sequence[str]] = []
+        for item in edges:
+            node = item.get("node", {}) or {}
+            observations_nodes = (node.get("observations") or {}).get("edges") or []
+            obs_public = ", ".join(
+                str((obs.get("node") or {}).get("public", "")) for obs in observations_nodes
+            )
+            rows_local.append(
+                (
+                    str(node.get("id", "")),
+                    str(node.get("name", "")),
+                    obs_public,
+                )
+            )
+        return rows_local
+
+    run_query_table(
+        query=queries.ADDITIONAL_ACTIVITY_OBS,
+        variables=variables,
+        label="observations",
+        json_output=json_output,
+        empty_msg="No observations.",
+        headers=["ID", "Name", "Public observations"],
+        title="👀 Observations",
+        rows_fn=_rows,
     )
-    payload = {
-        "additionalActivities": data.get("additionalActivities"),
-        "child": data.get("child"),
-    }
-    if json_output:
-        console.print_json(data=payload)
-    else:
-        console.print(Pretty(payload))
 
 
 @app.command()
@@ -1108,38 +1078,38 @@ def applications(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch applications (wnioski)."""
-    settings, tokens, context = _env()
     variables: dict[str, object] = {"phrase": phrase or None, "status": status}
-    data = _execute_graphql(
-        settings, tokens, queries.APPLICATIONS, variables, context, label="applications"
-    )
-    payload = {"applications": data.get("applications")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
+    headers = ["ID", "Created", "Form name", "Form status", "Status", "Director comment"]
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
         edges = (payload.get("applications") or {}).get("edges") or []
-        if not edges:
-            console.print("No applications.")
-            return
-        table = Table(title="📝 Applications", show_lines=True)
-        table.add_column("ID")
-        table.add_column("Created")
-        table.add_column("Form name")
-        table.add_column("Form status")
-        table.add_column("Status")
-        table.add_column("Director comment")
+        rows_local: list[Sequence[str]] = []
         for item in edges:
             node = item.get("node", {})
             form = node.get("applicationForm") or {}
-            table.add_row(
-                str(node.get("id", "")),
-                str(node.get("created", "")),
-                str(form.get("name", "")),
-                str(form.get("status", "")),
-                str(node.get("status", "")),
-                str(node.get("commentDirector", "")),
+            rows_local.append(
+                (
+                    str(node.get("id", "")),
+                    str(node.get("created", "")),
+                    str(form.get("name", "")),
+                    str(form.get("status", "")),
+                    str(node.get("status", "")),
+                    str(node.get("commentDirector", "")),
+                )
             )
-        console.print(table)
+        return rows_local
+
+    run_query_table(
+        query=queries.APPLICATIONS,
+        variables=variables,
+        label="applications",
+        json_output=json_output,
+        empty_msg="No applications.",
+        headers=headers,
+        title="📝 Applications",
+        rows_fn=_rows,
+        show_lines=True,
+    )
 
 
 @app.command("application-submit")
@@ -1179,41 +1149,58 @@ def application_submit(
 @app.command()
 def unread(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch unread notification/message counts."""
-    settings, tokens, context = _env()
-    client = GraphQLClient(settings, tokens, context=context)
-    try:
-        data = asyncio.run(client.execute(queries.UNREAD_COUNTS))
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-    payload = {"unreadCounts": data.get("me")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
-        counts = payload.get("unreadCounts") or {}
-        table = Table(title="🔔 Unread")
-        table.add_column("Type")
-        table.add_column("Count")
-        table.add_row("Notifications", str(counts.get("unreadNotificationsCount", 0)))
-        table.add_row("Messages", str(counts.get("unreadMessagesCount", 0)))
-        console.print(table)
+    headers = ["Type", "Count"]
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        counts = (payload.get("me") or {}) if payload else {}
+        return [
+            ("Notifications", str(counts.get("unreadNotificationsCount", 0))),
+            ("Messages", str(counts.get("unreadMessagesCount", 0))),
+        ]
+
+    run_query_table(
+        query=queries.UNREAD_COUNTS,
+        variables={},
+        label="me",
+        json_output=json_output,
+        empty_msg="No unread counters.",
+        headers=headers,
+        title="🔔 Unread",
+        rows_fn=_rows,
+    )
 
 
 @app.command()
 def colors(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """Fetch available preschools and color scheme."""
-    settings, tokens, context = _env()
-    client = GraphQLClient(settings, tokens, context=context)
-    try:
-        data = asyncio.run(client.execute(queries.COLORS))
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-    payload = {"colors": data}
-    if json_output:
-        console.print_json(data=payload)
-    else:
-        console.print(Pretty(payload))
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        me = payload.get("me") or {}
+        preschools = me.get("availablePreschools") or []
+        rows_local: list[Sequence[str]] = []
+        for ps in preschools:
+            colors_info = (ps.get("usercolorSet") or {}) if isinstance(ps, dict) else {}
+            rows_local.append(
+                (
+                    str(ps.get("id", "")),
+                    str(ps.get("name", "")),
+                    str(colors_info.get("headerColor", "")),
+                    str(colors_info.get("backgroundColor", "")),
+                    str(colors_info.get("accentColor", "")),
+                )
+            )
+        return rows_local
+
+    run_query_table(
+        query=queries.COLORS,
+        variables={},
+        label="me",
+        json_output=json_output,
+        empty_msg="No preschools/colors.",
+        headers=["ID", "Name", "Header", "Background", "Accent"],
+        title="🎨 Colors",
+        rows_fn=_rows,
+    )
 
 
 @app.command()
@@ -1228,7 +1215,6 @@ def payments(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payments history."""
-    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "dateFrom": date_from,
         "dateTo": date_to,
@@ -1238,34 +1224,37 @@ def payments(  # noqa: PLR0913
         "first": first,
         "after": after,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.PAYMENTS, variables, context, label="payments"
-    )
-    payload = {"payments": data.get("payments")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    edges = (payload.get("payments") or {}).get("edges") or []
-    if not edges:
-        console.print("No payments.")
-        return
-    rows = []
-    for item in edges:
-        node = item.get("node", {})
-        child = node.get("child") or {}
-        child_name = f"{child.get('name','')} {child.get('surname','')}".strip()
-        rows.append(
-            (
-                str(node.get("title", "")),
-                str(node.get("amount", "")),
-                str(node.get("paymentDate", "")),
-                str(node.get("type", "")),
-                "yes" if node.get("isBooked") else "no",
-                child_name or "-",
-            )
-        )
     headers = ["Title", "Amount", "Date", "Type", "Booked", "Child"]
-    _print_table("💳 Payments", rows, headers)
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        edges = (payload.get("payments") or {}).get("edges") or []
+        rows_local: list[Sequence[str]] = []
+        for item in edges:
+            node = item.get("node", {})
+            child = node.get("child") or {}
+            child_name = f"{child.get('name','')} {child.get('surname','')}".strip()
+            rows_local.append(
+                (
+                    str(node.get("title", "")),
+                    str(node.get("amount", "")),
+                    str(node.get("paymentDate", "")),
+                    str(node.get("type", "")),
+                    "yes" if node.get("isBooked") else "no",
+                    child_name or "-",
+                )
+            )
+        return rows_local
+
+    run_query_table(
+        query=queries.PAYMENTS,
+        variables=variables,
+        label="payments",
+        json_output=json_output,
+        empty_msg="No payments.",
+        headers=headers,
+        title="💳 Payments",
+        rows_fn=_rows,
+    )
 
 
 @app.command("payments-summary")
@@ -1281,7 +1270,6 @@ def payments_summary(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payments summary (balances per child)."""
-    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "search": search or None,
         "groupsIds": [g for g in groups_ids.split(",") if g] or None,
@@ -1292,35 +1280,40 @@ def payments_summary(  # noqa: PLR0913
         "childrenFirst": children_first,
         "childrenAfter": children_after,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.PAYMENTS_SUMMARY, variables, context, label="paymentsSummary"
-    )
-    payload = {"paymentsSummary": data.get("paymentsSummary")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    summary = payload.get("paymentsSummary") or {}
-    children_conn = summary.get("children") or {}
-    edges = children_conn.get("edges") or []
-    if not edges:
-        console.print("No payments summary entries.")
-        return
-    title = f"💳 Payments summary (full balance: {summary.get('fullBalance','')})"
-    rows = []
-    for item in edges:
-        node = item.get("node", {}) or {}
-        child_name = f"{node.get('name','')} {node.get('surname','')}".strip()
-        rows.append(
-            (
-                child_name or "-",
-                str(node.get("amount", "")),
-                str(node.get("paidAmount", "")),
-                str(node.get("balance", "")),
-                str(node.get("paidMonthlyBillsCount", "")),
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        summary = payload.get("paymentsSummary") or {}
+        children_conn = summary.get("children") or {}
+        edges = children_conn.get("edges") or []
+        rows_local: list[Sequence[str]] = []
+        for item in edges:
+            node = item.get("node", {}) or {}
+            child_name = f"{node.get('name','')} {node.get('surname','')}".strip()
+            rows_local.append(
+                (
+                    child_name or "-",
+                    str(node.get("amount", "")),
+                    str(node.get("paidAmount", "")),
+                    str(node.get("balance", "")),
+                    str(node.get("paidMonthlyBillsCount", "")),
+                )
             )
-        )
-    headers = ["Child", "Amount", "Paid", "Balance", "Paid bills"]
-    _print_table(title, rows, headers)
+        return rows_local
+
+    def _title(payload: dict[str, Any]) -> str:
+        summary = payload.get("paymentsSummary") or {}
+        return f"💳 Payments summary (full balance: {summary.get('fullBalance','')})"
+
+    run_query_table(
+        query=queries.PAYMENTS_SUMMARY,
+        variables=variables,
+        label="paymentsSummary",
+        json_output=json_output,
+        empty_msg="No payments summary entries.",
+        headers=["Child", "Amount", "Paid", "Balance", "Paid bills"],
+        title=_title,
+        rows_fn=_rows,
+    )
 
 
 @app.command("payment-orders")
@@ -1335,59 +1328,63 @@ def payment_orders(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch payment orders."""
-    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "first": first,
         "after": after,
         "before": before,
         "offset": offset,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.PAYMENT_ORDERS, variables, context, label="paymentOrders"
-    )
-    orders = data.get("paymentOrders") or {}
-    edges = orders.get("edges") or []
-    # client-side filters
-    if status:
-        edges = [
-            e
-            for e in edges
-            if str((e.get("node") or {}).get("bluemediaPaymentStatus", "")).lower()
-            == status.lower()
-        ]
-    if created_from:
-        edges = [
-            e
-            for e in edges
-            if str((e.get("node") or {}).get("created", "")) >= _normalize_date(created_from)
-        ]
-    if created_to:
-        edges = [
-            e
-            for e in edges
-            if str((e.get("node") or {}).get("created", "")) <= _normalize_date(created_to)
-        ]
-    payload = {"paymentOrders": {**orders, "edges": edges}}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    if not edges:
-        console.print("No payment orders.")
-        return
-    rows = []
-    for item in edges:
-        node = item.get("node", {}) or {}
-        rows.append(
-            (
-                str(node.get("id", "")),
-                str(node.get("created", "")),
-                str(node.get("amount", "")),
-                str(node.get("bluemediaPaymentStatus", "")),
-                str(node.get("bookingDate", "")),
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        orders = payload.get("paymentOrders") or {}
+        edges = orders.get("edges") or []
+        # client-side filters
+        filtered = edges
+        status_l = status.lower() if status else None
+        if status_l:
+            filtered = [
+                e
+                for e in filtered
+                if str((e.get("node") or {}).get("bluemediaPaymentStatus", "")).lower() == status_l
+            ]
+        if created_from:
+            filtered = [
+                e
+                for e in filtered
+                if str((e.get("node") or {}).get("created", "")) >= _normalize_date(created_from)
+            ]
+        if created_to:
+            filtered = [
+                e
+                for e in filtered
+                if str((e.get("node") or {}).get("created", "")) <= _normalize_date(created_to)
+            ]
+        rows_local: list[Sequence[str]] = []
+        for item in filtered:
+            node = item.get("node", {}) or {}
+            rows_local.append(
+                (
+                    str(node.get("id", "")),
+                    str(node.get("created", "")),
+                    str(node.get("amount", "")),
+                    str(node.get("bluemediaPaymentStatus", "")),
+                    str(node.get("bookingDate", "")),
+                )
             )
-        )
-    headers = ["ID", "Created", "Amount", "Status", "Booking date"]
-    _print_table("💸 Payment orders", rows, headers)
+        # mutate payload edges for potential reuse in JSON path
+        payload["paymentOrders"] = {**orders, "edges": filtered}
+        return rows_local
+
+    run_query_table(
+        query=queries.PAYMENT_ORDERS,
+        variables=variables,
+        label="paymentOrders",
+        json_output=json_output,
+        empty_msg="No payment orders.",
+        headers=["ID", "Created", "Amount", "Status", "Booking date"],
+        title="💸 Payment orders",
+        rows_fn=_rows,
+    )
 
 
 @app.command("payment-components")
@@ -1397,43 +1394,27 @@ def payment_components(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List payment components."""
-    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
-    try:
-        data = _execute_graphql(
-            settings,
-            tokens,
-            queries.PAYMENT_COMPONENTS,
-            variables,
-            context,
-            label="paymentComponents",
-        )
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    payload = {"paymentComponents": data.get("paymentComponents")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-
-    edges = (data.get("paymentComponents") or {}).get("edges") or []
-    if not edges:
-        console.print("No payment components.")
-        return
-    rows = [
-        (
-            str((edge.get("node") or {}).get("id", "")),
-            str((edge.get("node") or {}).get("name", "")),
-            str((edge.get("node") or {}).get("typeName", "")),
-            str((edge.get("node") or {}).get("fee", "")),
-            str((edge.get("node") or {}).get("billingRepeatTypeName", "")),
-            str((edge.get("node") or {}).get("feePeriodTypeName", "")),
-        )
-        for edge in edges
-    ]
-    headers = ["ID", "Name", "Type", "Fee", "Repeat", "Period"]
-    _print_table("🧾 Payment components", rows, headers)
+    run_query_table(
+        query=queries.PAYMENT_COMPONENTS,
+        variables=variables,
+        label="paymentComponents",
+        json_output=json_output,
+        empty_msg="No payment components.",
+        headers=["ID", "Name", "Type", "Fee", "Repeat", "Period"],
+        title="🧾 Payment components",
+        rows_fn=lambda payload: [
+            (
+                str((edge.get("node") or {}).get("id", "")),
+                str((edge.get("node") or {}).get("name", "")),
+                str((edge.get("node") or {}).get("typeName", "")),
+                str((edge.get("node") or {}).get("fee", "")),
+                str((edge.get("node") or {}).get("billingRepeatTypeName", "")),
+                str((edge.get("node") or {}).get("feePeriodTypeName", "")),
+            )
+            for edge in (payload.get("paymentComponents") or {}).get("edges") or []
+        ],
+    )
 
 
 @app.command("billing-periods")
@@ -1443,36 +1424,25 @@ def billing_periods(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List billing periods."""
-    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
-    try:
-        data = _execute_graphql(
-            settings, tokens, queries.BILLING_PERIODS, variables, context, label="billingPeriods"
-        )
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    payload = {"billingPeriods": data.get("billingPeriods")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-
-    edges = (data.get("billingPeriods") or {}).get("edges") or []
-    if not edges:
-        console.print("No billing periods.")
-        return
-    rows = [
-        (
-            str((edge.get("node") or {}).get("id", "")),
-            str(((edge.get("node") or {}).get("month") or {}).get("startDate", "")),
-            str(((edge.get("node") or {}).get("month") or {}).get("endDate", "")),
-            "yes" if (edge.get("node") or {}).get("isClosed") else "no",
-        )
-        for edge in edges
-    ]
-    headers = ["ID", "Start", "End", "Closed"]
-    _print_table("🗓 Billing periods", rows, headers)
+    run_query_table(
+        query=queries.BILLING_PERIODS,
+        variables=variables,
+        label="billingPeriods",
+        json_output=json_output,
+        empty_msg="No billing periods.",
+        headers=["ID", "Start", "End", "Closed"],
+        title="🗓 Billing periods",
+        rows_fn=lambda payload: [
+            (
+                str((edge.get("node") or {}).get("id", "")),
+                str(((edge.get("node") or {}).get("month") or {}).get("startDate", "")),
+                str(((edge.get("node") or {}).get("month") or {}).get("endDate", "")),
+                "yes" if (edge.get("node") or {}).get("isClosed") else "no",
+            )
+            for edge in (payload.get("billingPeriods") or {}).get("edges") or []
+        ],
+    )
 
 
 @app.command("employee-billing-periods")
@@ -1482,111 +1452,73 @@ def employee_billing_periods(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List billing periods for employees (if permitted)."""
-    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
-    try:
-        data = _execute_graphql(
-            settings,
-            tokens,
-            queries.EMPLOYEE_BILLING_PERIODS,
-            variables,
-            context,
-            label="employeeBillingPeriods",
-        )
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    payload = {"employeeBillingPeriods": data.get("employeeBillingPeriods")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-
-    edges = (data.get("employeeBillingPeriods") or {}).get("edges") or []
-    if not edges:
-        console.print("No employee billing periods.")
-        return
-    rows = [
-        (
-            str((edge.get("node") or {}).get("id", "")),
-            str(((edge.get("node") or {}).get("month") or {}).get("startDate", "")),
-            str(((edge.get("node") or {}).get("month") or {}).get("endDate", "")),
-            "yes" if (edge.get("node") or {}).get("isClosed") else "no",
-            str((edge.get("node") or {}).get("monthlyBillsTotalAmount", "")),
-            str((edge.get("node") or {}).get("monthlyBillsTotalPaid", "")),
-        )
-        for edge in edges
-    ]
-    headers = ["ID", "Start", "End", "Closed", "Total", "Paid"]
-    _print_table("🗓 Employee billing periods", rows, headers)
+    run_query_table(
+        query=queries.EMPLOYEE_BILLING_PERIODS,
+        variables=variables,
+        label="employeeBillingPeriods",
+        json_output=json_output,
+        empty_msg="No employee billing periods.",
+        headers=["ID", "Start", "End", "Closed", "Total", "Paid"],
+        title="🗓 Employee billing periods",
+        rows_fn=lambda payload: [
+            (
+                str((edge.get("node") or {}).get("id", "")),
+                str(((edge.get("node") or {}).get("month") or {}).get("startDate", "")),
+                str(((edge.get("node") or {}).get("month") or {}).get("endDate", "")),
+                "yes" if (edge.get("node") or {}).get("isClosed") else "no",
+                str((edge.get("node") or {}).get("monthlyBillsTotalAmount", "")),
+                str((edge.get("node") or {}).get("monthlyBillsTotalPaid", "")),
+            )
+            for edge in (payload.get("employeeBillingPeriods") or {}).get("edges") or []
+        ],
+    )
 
 
 @app.command("tuition-discounts")
 def tuition_discounts(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """List tuition discounts (if available)."""
-    settings, tokens, context = _env()
-    try:
-        data = _execute_graphql(
-            settings, tokens, queries.TUITION_DISCOUNTS, {}, context, label="tuitionDiscounts"
-        )
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    payload = {"tuitionDiscounts": data.get("tuitionDiscounts")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-
-    discounts = data.get("tuitionDiscounts") or []
-    if not discounts:
-        console.print("No tuition discounts.")
-        return
-    rows = [
-        (
-            str(d.get("id", "")),
-            str(d.get("name", "")),
-            str(d.get("value", "")),
-            str(d.get("valueType", "")),
-            "yes" if d.get("active") else "no",
-        )
-        for d in discounts
-    ]
-    headers = ["ID", "Name", "Value", "Type", "Active"]
-    _print_table("🏷 Tuition discounts", rows, headers)
+    run_query_table(
+        query=queries.TUITION_DISCOUNTS,
+        variables={},
+        label="tuitionDiscounts",
+        json_output=json_output,
+        empty_msg="No tuition discounts.",
+        headers=["ID", "Name", "Value", "Type", "Active"],
+        title="🏷 Tuition discounts",
+        rows_fn=lambda payload: [
+            (
+                str(d.get("id", "")),
+                str(d.get("name", "")),
+                str(d.get("value", "")),
+                str(d.get("valueType", "")),
+                "yes" if d.get("active") else "no",
+            )
+            for d in (payload.get("tuitionDiscounts") or [])
+        ],
+    )
 
 
 @app.command("employee-roles")
 def employee_roles(json_output: bool = typer.Option(False, "--json/--no-json")) -> None:
     """List employee roles (if permitted)."""
-    settings, tokens, context = _env()
-    try:
-        data = _execute_graphql(
-            settings, tokens, queries.EMPLOYEE_ROLES, {}, context, label="employeeRoles"
-        )
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    payload = {"employeeRoles": data.get("employeeRoles")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-
-    roles = data.get("employeeRoles") or []
-    if not roles:
-        console.print("No employee roles.")
-        return
-    rows = [
-        (
-            str(r.get("id", "")),
-            str(r.get("name", "")),
-            ", ".join(sorted([str(p) for p in (r.get("permissions") or [])])),
-        )
-        for r in roles
-    ]
-    headers = ["ID", "Name", "Permissions"]
-    _print_table("👥 Employee roles", rows, headers)
+    run_query_table(
+        query=queries.EMPLOYEE_ROLES,
+        variables={},
+        label="employeeRoles",
+        json_output=json_output,
+        empty_msg="No employee roles.",
+        headers=["ID", "Name", "Permissions"],
+        title="👥 Employee roles",
+        rows_fn=lambda payload: [
+            (
+                str(r.get("id", "")),
+                str(r.get("name", "")),
+                ", ".join(sorted([str(p) for p in (r.get("permissions") or [])])),
+            )
+            for r in (payload.get("employeeRoles") or [])
+        ],
+    )
 
 
 @app.command("employees")
@@ -1596,39 +1528,37 @@ def employees(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List employees (basic fields)."""
-    settings, tokens, context = _env()
     variables = {"first": first, "after": after}
-    try:
-        data = _execute_graphql(
-            settings, tokens, queries.EMPLOYEES, variables, context, label="employees"
-        )
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
 
-    payload = {"employees": data.get("employees")}
-    if json_output:
-        console.print_json(data=payload)
-        return
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        edges = (payload.get("employees") or {}).get("edges") or []
+        rows_local: list[Sequence[str]] = []
+        for edge in edges:
+            node = edge.get("node") or {}
+            full_name = f"{node.get('firstName','')} {node.get('lastName','')}".strip()
+            role = (node.get("role") or {}).get("name", "")
+            rows_local.append(
+                (
+                    str(node.get("id", "")),
+                    full_name,
+                    str(node.get("email", "")),
+                    str(node.get("phone", "")),
+                    role,
+                    str(node.get("position", "")),
+                )
+            )
+        return rows_local
 
-    edges = (data.get("employees") or {}).get("edges") or []
-    if not edges:
-        console.print("No employees.")
-        return
-    rows = [
-        (
-            str((edge.get("node") or {}).get("id", "")),
-            f"{(edge.get('node') or {}).get('firstName','')} "
-            f"{(edge.get('node') or {}).get('lastName','')}".strip(),
-            str((edge.get("node") or {}).get("email", "")),
-            str((edge.get("node") or {}).get("phone", "")),
-            str(((edge.get("node") or {}).get("role") or {}).get("name", "")),
-            str((edge.get("node") or {}).get("position", "")),
-        )
-        for edge in edges
-    ]
-    headers = ["ID", "Name", "Email", "Phone", "Role", "Position"]
-    _print_table("👤 Employees", rows, headers)
+    run_query_table(
+        query=queries.EMPLOYEES,
+        variables=variables,
+        label="employees",
+        json_output=json_output,
+        empty_msg="No employees.",
+        headers=["ID", "Name", "Email", "Phone", "Role", "Position"],
+        title="👤 Employees",
+        rows_fn=_rows,
+    )
 
 
 @app.command()
@@ -1641,7 +1571,6 @@ def monthly_bills(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch monthly bills."""
-    settings, tokens, context = _env()
     variables = {
         "year": year,
         "child": child,
@@ -1649,37 +1578,44 @@ def monthly_bills(  # noqa: PLR0913
         "first": first,
         "after": after,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.MONTHLY_BILLS, variables, context, label="monthly_bills"
-    )
-    payload = {"monthlyBills": data.get("monthlyBills")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
+    headers = ["Payment due", "Child", "Full amount", "Paid amount", "Balance"]
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
         bills_raw = payload.get("monthlyBills") or {}
         bills: dict[str, Any] = bills_raw if isinstance(bills_raw, dict) else {}
         edges = bills.get("edges") or []
-        total_balance = bills.get("totalBalance", "")
-        total = str(total_balance)
-        table = Table(title=f"💰 Monthly bills (total balance: {total})")
-        table.add_column("Payment due")
-        table.add_column("Child")
-        table.add_column("Full amount")
-        table.add_column("Paid amount")
-        table.add_column("Balance")
+        rows_local: list[Sequence[str]] = []
         for item in edges:
             node_raw = item.get("node", {})
             node: dict[str, Any] = node_raw if isinstance(node_raw, dict) else {}
             child_raw = node.get("child") or {}
             child_info: dict[str, Any] = child_raw if isinstance(child_raw, dict) else {}
-            table.add_row(
-                str(node.get("paymentDueTo", "")),
-                f"{child_info.get('name','')} {child_info.get('surname','')}".strip(),
-                str(node.get("fullAmount", "")),
-                str(node.get("paidAmount", "")),
-                str(node.get("balance", "")),
+            rows_local.append(
+                (
+                    str(node.get("paymentDueTo", "")),
+                    f"{child_info.get('name','')} {child_info.get('surname','')}".strip(),
+                    str(node.get("fullAmount", "")),
+                    str(node.get("paidAmount", "")),
+                    str(node.get("balance", "")),
+                )
             )
-        console.print(table)
+        return rows_local
+
+    def _title(payload: dict[str, Any]) -> str:
+        bills_raw = payload.get("monthlyBills") or {}
+        total_balance = (bills_raw or {}).get("totalBalance", "")
+        return f"💰 Monthly bills (total balance: {total_balance})"
+
+    run_query_table(
+        query=queries.MONTHLY_BILLS,
+        variables=variables,
+        label="monthlyBills",
+        json_output=json_output,
+        empty_msg="No monthly bills.",
+        headers=headers,
+        title=_title,
+        rows_fn=_rows,
+    )
 
 
 @app.command()
@@ -1692,8 +1628,6 @@ def galleries(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch galleries."""
-    settings, tokens, context = _env()
-
     variables: dict[str, object] = {
         "groupId": group_id,
         "first": first,
@@ -1701,18 +1635,11 @@ def galleries(  # noqa: PLR0913
         "search": search,
         "order": order,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.GALLERIES, variables, context, label="galleries"
-    )
-    payload = {"galleries": data.get("galleries")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
+    headers = ["ID", "Name", "Created", "Images"]
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
         edges = (payload.get("galleries") or {}).get("edges") or []
-        if not edges:
-            console.print("No galleries.")
-            return
-        rows = [
+        return [
             (
                 str((item.get("node") or {}).get("id", "")),
                 str((item.get("node") or {}).get("name", "")),
@@ -1721,8 +1648,18 @@ def galleries(  # noqa: PLR0913
             )
             for item in edges
         ]
-        headers = ["ID", "Name", "Created", "Images"]
-        _print_table("🖼️ Galleries", rows, headers, show_lines=True)
+
+    run_query_table(
+        query=queries.GALLERIES,
+        variables=variables,
+        label="galleries",
+        json_output=json_output,
+        empty_msg="No galleries.",
+        headers=headers,
+        title="🖼️ Galleries",
+        rows_fn=_rows,
+        show_lines=True,
+    )
 
 
 @app.command()
@@ -1863,7 +1800,6 @@ def chat_threads(  # noqa: PLR0913
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """List chat threads."""
-    settings, tokens, context = _env()
     variables: dict[str, object] = {
         "first": first,
         "after": after,
@@ -1872,18 +1808,18 @@ def chat_threads(  # noqa: PLR0913
         "preschool": preschool_id,
         "search": search or None,
     }
-    data = _execute_graphql(
-        settings, tokens, queries.CHAT_THREADS, variables, context, label="threads"
+    run_query_table(
+        query=queries.CHAT_THREADS,
+        variables=variables,
+        label="threads",
+        json_output=json_output,
+        empty_msg="No threads.",
+        headers=["Name", "Child", "Recipients", "Last message", "Type", "Modified"],
+        title="💬 Threads",
+        rows_fn=lambda payload: _rows_for_threads(
+            (payload.get("threads") or {}).get("edges") or [], include_id=False
+        ),
     )
-    payload = {"threads": data.get("threads")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    edges = (payload.get("threads") or {}).get("edges") or []
-    if not edges:
-        console.print("No threads.")
-        return
-    console.print(_render_threads_table(edges))
 
 
 @app.command("chat-messages")
@@ -1914,49 +1850,50 @@ def chat_messages(
             raise typer.Exit(code=1)
 
     variables: dict[str, object] = {"id": chosen_thread, "first": first, "after": after}
-    data = _execute_graphql(
-        settings, tokens, queries.CHAT_MESSAGES, variables, context, label="thread"
-    )
-    payload = {"thread": data.get("thread")}
-    if json_output:
-        console.print_json(data=payload)
-        return
-    thread = payload.get("thread") or {}
-    messages = (thread.get("messages") or {}).get("edges") or []
-    if not messages:
-        console.print("No messages.")
-        return
-    rows = []
-    for item in messages:
-        node = item.get("node", {})
-        sender = (node.get("sender") or {}).get("fullName", "")
-        text = str(node.get("text", ""))
-        preview = _truncate(text, TEXT_PREVIEW)
-        rows.append(
-            (
-                str(node.get("id", "")),
-                str(node.get("created", "")),
-                str(sender),
-                "yes" if node.get("read") else "no",
-                str(thread.get("type", "")),
-                str(thread.get("modified", "")),
-                ", ".join(r.get("fullName", "") for r in (thread.get("recipients") or [])),
-                _truncate(str(thread.get("lastMessage", "")), LAST_MSG_PREVIEW),
-                preview,
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
+        thread = payload.get("thread") or {}
+        messages = (thread.get("messages") or {}).get("edges") or []
+        rows_local: list[Sequence[str]] = []
+        for item in messages:
+            node = item.get("node", {})
+            sender = (node.get("sender") or {}).get("fullName", "")
+            text = str(node.get("text", ""))
+            rows_local.append(
+                (
+                    str(node.get("id", "")),
+                    str(node.get("created", "")),
+                    str(sender),
+                    "yes" if node.get("read") else "no",
+                    str(thread.get("type", "")),
+                    str(thread.get("modified", "")),
+                    ", ".join(r.get("fullName", "") for r in (thread.get("recipients") or [])),
+                    _truncate(str(thread.get("lastMessage", "")), LAST_MSG_PREVIEW),
+                    _truncate(text, TEXT_PREVIEW),
+                )
             )
-        )
-    headers = [
-        "ID",
-        "Created",
-        "Sender",
-        "Read",
-        "Type",
-        "Modified",
-        "Recipients",
-        "Last message",
-        "Text",
-    ]
-    _print_table(f"💬 Messages in {thread.get('name','')}", rows, headers)
+        return rows_local
+
+    run_query_table(
+        query=queries.CHAT_MESSAGES,
+        variables=variables,
+        label="thread",
+        json_output=json_output,
+        empty_msg="No messages.",
+        headers=[
+            "ID",
+            "Created",
+            "Sender",
+            "Read",
+            "Type",
+            "Modified",
+            "Recipients",
+            "Last message",
+            "Text",
+        ],
+        title=lambda payload: f"💬 Messages in {(payload.get('thread') or {}).get('name','')}",
+        rows_fn=_rows,
+    )
 
 
 @app.command()
@@ -1965,33 +1902,33 @@ def chat_users(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Fetch users available for chat."""
-    settings, tokens, context = _env()
     types_list = [u for u in user_types.split(",") if u] if user_types else []
     variables = {"userTypes": types_list}
-    data = _execute_graphql(
-        settings, tokens, queries.USERS_FOR_CHAT, variables, context, label="chat_users"
-    )
-    payload = {"usersForChat": data.get("usersForChat")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
+
+    def _rows(payload: dict[str, Any]) -> list[Sequence[str]]:
         users = payload.get("usersForChat") or []
-        if not users:
-            console.print("No chat users.")
-            return
-        table = Table(title="💬 Chat users")
-        table.add_column("Name")
-        table.add_column("Type")
-        table.add_column("Position")
-        table.add_column("Role")
+        rows_local: list[Sequence[str]] = []
         for user in users:
-            table.add_row(
-                str(user.get("chatDisplayName", "")),
-                str(user.get("userType", "")),
-                str(user.get("chatUserPosition", "")),
-                str(user.get("roleName", "")),
+            rows_local.append(
+                (
+                    str(user.get("chatDisplayName", "")),
+                    str(user.get("userType", "")),
+                    str(user.get("chatUserPosition", "")),
+                    str(user.get("roleName", "")),
+                )
             )
-        console.print(table)
+        return rows_local
+
+    run_query_table(
+        query=queries.USERS_FOR_CHAT,
+        variables=variables,
+        label="usersForChat",
+        json_output=json_output,
+        empty_msg="No chat users.",
+        headers=["Name", "Type", "Position", "Role"],
+        title="💬 Chat users",
+        rows_fn=_rows,
+    )
 
 
 @app.command()
@@ -2000,23 +1937,23 @@ def chat_search(
     json_output: bool = typer.Option(False, "--json/--no-json"),
 ) -> None:
     """Search chat groups and parents (groupsForChat)."""
-    settings, tokens, context = _env()
-    if not tokens:
-        console.print("[red]No session found. Run `kidsview-cli login` first.[/red]")
-        raise typer.Exit(code=1)
-
     variables = {"search": search or None}
-    client = GraphQLClient(settings, tokens, context=context)
-    try:
-        data = asyncio.run(client.execute(queries.GROUPS_FOR_CHAT, variables))
-    except ApiError as exc:
-        console.print(f"[red]GraphQL error:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-    payload = {"groupsForChat": data.get("groupsForChat")}
-    if json_output:
-        console.print_json(data=payload)
-    else:
-        console.print(Pretty(payload))
+    run_query_table(
+        query=queries.GROUPS_FOR_CHAT,
+        variables=variables,
+        label="groupsForChat",
+        json_output=json_output,
+        empty_msg="No chat groups found.",
+        headers=["Name", "Children/Parents"],
+        title="💬 Chat search",
+        rows_fn=lambda payload: [
+            (
+                str(group.get("name", "")),
+                ", ".join(child.get("fullName", "") for child in (group.get("children") or [])),
+            )
+            for group in (payload.get("groupsForChat") or [])
+        ],
+    )
 
 
 @app.command()
