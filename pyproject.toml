@@ -28,7 +28,18 @@ dev = [
   "mypy>=1.11.0",
   "pre-commit>=3.8.0",
   "types-requests",
+  "pytest-cov>=5.0.0",
 ]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 0
 
 [project.scripts]
 kidsview-cli = "kidsview_cli.cli:app"
